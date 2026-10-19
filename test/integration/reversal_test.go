@@ -5,8 +5,6 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -19,7 +17,6 @@ import (
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
-	"github.com/TheProzin/Jungle-Go/internal/httpapi"
 	"github.com/TheProzin/Jungle-Go/internal/infra/postgres"
 )
 
@@ -343,9 +340,11 @@ func TestReversalHTTPContract(t *testing.T) {
 	server := newWalletWageringServer(t, pool, walletService, wageringService)
 	defer server.Close()
 	client := server.Client()
+	internalHeaders := authHeaders(internalToken(t))
+	providerHeaders := authHeaders(providerAToken(t))
 
 	playerID := uuid.New()
-	createResponse, createBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", nil, map[string]any{
+	createResponse, createBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", internalHeaders, map[string]any{
 		"playerId":       playerID.String(),
 		"initialBalance": map[string]string{"amount": "100.00", "currency": "BRL"},
 	})
@@ -359,7 +358,7 @@ func TestReversalHTTPContract(t *testing.T) {
 		t.Fatalf("decode wallet: %v", err)
 	}
 
-	pendingResponse, pendingBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:refund-pending"}, processRequestBody("provider-a", "refund-pending", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", "bet-not-there"))
+	pendingResponse, pendingBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:refund-pending"}), processRequestBody("provider-a", "refund-pending", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", "bet-not-there"))
 	if pendingResponse.StatusCode != http.StatusAccepted {
 		t.Fatalf("pending status = %d, body = %s", pendingResponse.StatusCode, pendingBody)
 	}
@@ -374,7 +373,7 @@ func TestReversalHTTPContract(t *testing.T) {
 		t.Fatalf("status = %q, want PENDING_REFERENCE", pending.Status)
 	}
 
-	replayResponse, replayBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:refund-pending"}, processRequestBody("provider-a", "refund-pending", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", "bet-not-there"))
+	replayResponse, replayBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:refund-pending"}), processRequestBody("provider-a", "refund-pending", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", "bet-not-there"))
 	if replayResponse.StatusCode != http.StatusAccepted {
 		t.Fatalf("pending replay status = %d, body = %s", replayResponse.StatusCode, replayBody)
 	}
@@ -388,7 +387,7 @@ func TestReversalHTTPContract(t *testing.T) {
 		t.Fatal("expected idempotentReplay=true")
 	}
 
-	getResponse, getBody := doJSON(t, client, http.MethodGet, server.URL+"/wagering/transactions/"+pending.TransactionID, nil, nil)
+	getResponse, getBody := doJSON(t, client, http.MethodGet, server.URL+"/wagering/transactions/"+pending.TransactionID, providerHeaders, nil)
 	if getResponse.StatusCode != http.StatusOK {
 		t.Fatalf("get pending status = %d, body = %s", getResponse.StatusCode, getBody)
 	}
@@ -404,7 +403,7 @@ func TestReversalHTTPContract(t *testing.T) {
 		t.Fatalf("unexpected pending transaction: %+v", fetched)
 	}
 
-	missingReferenceResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:refund-no-reference"}, processRequestBody("provider-a", "refund-no-reference", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", ""))
+	missingReferenceResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:refund-no-reference"}), processRequestBody("provider-a", "refund-no-reference", playerID.String(), wallet.ID, "round-1", "game-1", "REFUND", "10.00", ""))
 	if missingReferenceResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing reference status = %d, want 400", missingReferenceResponse.StatusCode)
 	}
@@ -412,11 +411,5 @@ func TestReversalHTTPContract(t *testing.T) {
 
 func newWalletWageringServer(t *testing.T, pool *pgxpool.Pool, walletService *walletapp.Service, wageringService *wageringapp.Service) *httptest.Server {
 	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	health := httpapi.NewHealth(pool, nil, &config.Config{ReadinessTimeout: time.Second}, logger)
-	return httptest.NewServer(httpapi.NewMux(
-		health,
-		httpapi.NewWalletHandler(walletService),
-		httpapi.NewWageringHandler(wageringService),
-	))
+	return newTestHTTPServer(t, pool, walletService, wageringService)
 }

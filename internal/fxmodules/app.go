@@ -5,10 +5,12 @@ import (
 
 	"go.uber.org/fx"
 
+	outboxapp "github.com/TheProzin/Jungle-Go/internal/app/outbox"
 	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/httpapi"
+	authinfra "github.com/TheProzin/Jungle-Go/internal/infra/auth"
 	"github.com/TheProzin/Jungle-Go/internal/infra/postgres"
 	"github.com/TheProzin/Jungle-Go/internal/infra/sqs"
 	"github.com/TheProzin/Jungle-Go/internal/observability"
@@ -22,9 +24,13 @@ var App = fx.Module("app",
 		postgres.NewUnitOfWork,
 		sqs.NewClient,
 		sqs.NewConsumer,
+		sqs.NewEventSender,
+		outboxapp.NewPublisher,
 		walletapp.NewService,
 		wageringapp.NewServiceWithConfig,
 		wageringapp.NewReferenceWorker,
+		authinfra.NewAuthenticator,
+		httpapi.NewAuth,
 		httpapi.NewHealth,
 		httpapi.NewWalletHandler,
 		httpapi.NewWageringHandler,
@@ -34,4 +40,5 @@ var App = fx.Module("app",
 	fx.Invoke(func(*http.Server) {}),
 	fx.Invoke(StartReferenceWorker),
 	fx.Invoke(StartSQSConsumer),
+	fx.Invoke(StartOutboxPublisher),
 )

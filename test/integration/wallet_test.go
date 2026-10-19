@@ -6,23 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
-	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
-	"github.com/TheProzin/Jungle-Go/internal/httpapi"
 	"github.com/TheProzin/Jungle-Go/internal/infra/postgres"
 )
 
@@ -228,23 +221,22 @@ func TestWalletHTTPContract(t *testing.T) {
 	pool := newTestPool(t)
 	unitOfWork := postgres.NewUnitOfWork(pool)
 	service := walletapp.NewService(unitOfWork)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handler := httpapi.NewWalletHandler(service)
-	wageringHandler := httpapi.NewWageringHandler(wageringapp.NewService(unitOfWork))
-	health := httpapi.NewHealth(pool, nil, &config.Config{ReadinessTimeout: time.Second}, logger)
-	server := httptest.NewServer(httpapi.NewMux(health, handler, wageringHandler))
+	wageringService := wageringapp.NewService(unitOfWork)
+	server := newTestHTTPServer(t, pool, service, wageringService)
 	defer server.Close()
+	client := server.Client()
+	token := internalToken(t)
+	headers := authHeaders(token)
 
 	playerID := uuid.New()
-	body := `{"playerId":"` + playerID.String() + `","initialBalance":{"amount":"1000.00","currency":"BRL"}}`
-
-	response, err := http.Post(server.URL+"/wallets", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /wallets error = %v", err)
+	body := map[string]any{
+		"playerId":       playerID.String(),
+		"initialBalance": map[string]string{"amount": "1000.00", "currency": "BRL"},
 	}
-	defer response.Body.Close()
+
+	response, responseBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", headers, body)
 	if response.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /wallets status = %d, want 201", response.StatusCode)
+		t.Fatalf("POST /wallets status = %d, body = %s", response.StatusCode, responseBody)
 	}
 
 	var created struct {
@@ -253,27 +245,19 @@ func TestWalletHTTPContract(t *testing.T) {
 		Balance  money.Money `json:"balance"`
 		Version  int64       `json:"version"`
 	}
-	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+	if err := json.Unmarshal(responseBody, &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
 	if created.ID == "" || created.PlayerID != playerID.String() || created.Balance.Amount() != "1000.00" || created.Version != 1 {
 		t.Fatalf("unexpected create response: %+v", created)
 	}
 
-	getResponse, err := http.Get(server.URL + "/wallets/" + created.ID)
-	if err != nil {
-		t.Fatalf("GET /wallets error = %v", err)
-	}
-	defer getResponse.Body.Close()
+	getResponse, _ := doJSON(t, client, http.MethodGet, server.URL+"/wallets/"+created.ID, headers, nil)
 	if getResponse.StatusCode != http.StatusOK {
 		t.Fatalf("GET /wallets status = %d, want 200", getResponse.StatusCode)
 	}
 
-	ledgerResponse, err := http.Get(server.URL + "/wallets/" + created.ID + "/ledger?limit=50")
-	if err != nil {
-		t.Fatalf("GET ledger error = %v", err)
-	}
-	defer ledgerResponse.Body.Close()
+	ledgerResponse, ledgerBody := doJSON(t, client, http.MethodGet, server.URL+"/wallets/"+created.ID+"/ledger?limit=50", headers, nil)
 	if ledgerResponse.StatusCode != http.StatusOK {
 		t.Fatalf("GET ledger status = %d, want 200", ledgerResponse.StatusCode)
 	}
@@ -283,18 +267,14 @@ func TestWalletHTTPContract(t *testing.T) {
 			Money     money.Money `json:"money"`
 		} `json:"items"`
 	}
-	if err := json.NewDecoder(ledgerResponse.Body).Decode(&page); err != nil {
+	if err := json.Unmarshal(ledgerBody, &page); err != nil {
 		t.Fatalf("decode ledger response: %v", err)
 	}
 	if len(page.Items) != 1 || page.Items[0].Direction != "CREDIT" || page.Items[0].Money.Amount() != "1000.00" {
 		t.Fatalf("unexpected ledger response: %+v", page)
 	}
 
-	reconciliationResponse, err := http.Post(server.URL+"/wallets/"+created.ID+"/reconciliation", "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST reconciliation error = %v", err)
-	}
-	defer reconciliationResponse.Body.Close()
+	reconciliationResponse, reconciliationBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets/"+created.ID+"/reconciliation", headers, nil)
 	if reconciliationResponse.StatusCode != http.StatusOK {
 		t.Fatalf("POST reconciliation status = %d, want 200", reconciliationResponse.StatusCode)
 	}
@@ -303,27 +283,23 @@ func TestWalletHTTPContract(t *testing.T) {
 		CheckedEntries int         `json:"checkedEntries"`
 		Difference     money.Money `json:"difference"`
 	}
-	if err := json.NewDecoder(reconciliationResponse.Body).Decode(&reconciliation); err != nil {
+	if err := json.Unmarshal(reconciliationBody, &reconciliation); err != nil {
 		t.Fatalf("decode reconciliation response: %v", err)
 	}
 	if !reconciliation.Consistent || reconciliation.CheckedEntries != 1 || reconciliation.Difference.Amount() != "0.00" {
 		t.Fatalf("unexpected reconciliation response: %+v", reconciliation)
 	}
 
-	duplicate, err := http.Post(server.URL+"/wallets", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("duplicate POST error = %v", err)
-	}
-	defer duplicate.Body.Close()
+	duplicate, duplicateBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", headers, body)
 	if duplicate.StatusCode != http.StatusConflict {
-		t.Fatalf("duplicate status = %d, want 409", duplicate.StatusCode)
+		t.Fatalf("duplicate status = %d, want 409, body = %s", duplicate.StatusCode, duplicateBody)
 	}
 	var apiError struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.NewDecoder(duplicate.Body).Decode(&apiError); err != nil {
+	if err := json.Unmarshal(duplicateBody, &apiError); err != nil {
 		t.Fatalf("decode duplicate response: %v", err)
 	}
 	if apiError.Error.Code != "WALLET_ALREADY_EXISTS" {

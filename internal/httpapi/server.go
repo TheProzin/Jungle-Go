@@ -14,17 +14,17 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/config"
 )
 
-func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler) *http.ServeMux {
+func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler, auth *Auth) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", health.Live)
 	mux.HandleFunc("GET /health/ready", health.Ready)
-	mux.HandleFunc("POST /wallets", wallets.Create)
-	mux.HandleFunc("GET /wallets/{walletId}", wallets.Get)
-	mux.HandleFunc("GET /wallets/{walletId}/ledger", wallets.Ledger)
-	mux.HandleFunc("POST /wallets/{walletId}/reconciliation", wallets.Reconcile)
-	mux.HandleFunc("POST /wagering/transactions", wagering.Process)
-	mux.HandleFunc("GET /wagering/transactions/{transactionId}", wagering.Get)
-	mux.HandleFunc("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", wagering.GetByProvider)
+	mux.HandleFunc("POST /wallets", auth.Internal(wallets.Create))
+	mux.HandleFunc("GET /wallets/{walletId}", auth.Internal(wallets.Get))
+	mux.HandleFunc("GET /wallets/{walletId}/ledger", auth.Internal(wallets.Ledger))
+	mux.HandleFunc("POST /wallets/{walletId}/reconciliation", auth.Internal(wallets.Reconcile))
+	mux.HandleFunc("POST /wagering/transactions", auth.Provider(wagering.Process))
+	mux.HandleFunc("GET /wagering/transactions/{transactionId}", auth.Authenticated(wagering.Get))
+	mux.HandleFunc("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", auth.Authenticated(wagering.GetByProvider))
 	return mux
 }
 

@@ -8,22 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
-	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
-	"github.com/TheProzin/Jungle-Go/internal/httpapi"
 	"github.com/TheProzin/Jungle-Go/internal/infra/postgres"
 )
 
@@ -285,18 +280,15 @@ func TestWageringHTTPContract(t *testing.T) {
 	unitOfWork := postgres.NewUnitOfWork(pool)
 	walletService := walletapp.NewService(unitOfWork)
 	wageringService := wageringapp.NewService(unitOfWork)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	health := httpapi.NewHealth(pool, nil, &config.Config{ReadinessTimeout: time.Second}, logger)
-	server := httptest.NewServer(httpapi.NewMux(
-		health,
-		httpapi.NewWalletHandler(walletService),
-		httpapi.NewWageringHandler(wageringService),
-	))
+	server := newTestHTTPServer(t, pool, walletService, wageringService)
 	defer server.Close()
 	client := server.Client()
 
+	internalHeaders := authHeaders(internalToken(t))
+	providerHeaders := authHeaders(providerAToken(t))
+
 	playerID := uuid.New()
-	createResponse, createBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", nil, map[string]any{
+	createResponse, createBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", internalHeaders, map[string]any{
 		"playerId":       playerID.String(),
 		"initialBalance": map[string]string{"amount": "1000.00", "currency": "BRL"},
 	})
@@ -311,7 +303,7 @@ func TestWageringHTTPContract(t *testing.T) {
 	}
 
 	body := processRequestBody("provider-a", "http-bet-1", playerID.String(), wallet.ID, "round-1", "game-1", "BET", "25.00", "")
-	headers := map[string]string{"Idempotency-Key": "provider-a:http-bet-1"}
+	headers := mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:http-bet-1"})
 
 	processResponse, processBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", headers, body)
 	if processResponse.StatusCode != http.StatusOK {
@@ -344,7 +336,7 @@ func TestWageringHTTPContract(t *testing.T) {
 		t.Fatal("expected idempotentReplay=true")
 	}
 
-	getResponse, getBody := doJSON(t, client, http.MethodGet, server.URL+"/wagering/transactions/"+processed.TransactionID, nil, nil)
+	getResponse, getBody := doJSON(t, client, http.MethodGet, server.URL+"/wagering/transactions/"+processed.TransactionID, providerHeaders, nil)
 	if getResponse.StatusCode != http.StatusOK {
 		t.Fatalf("get transaction status = %d, body = %s", getResponse.StatusCode, getBody)
 	}
@@ -359,7 +351,7 @@ func TestWageringHTTPContract(t *testing.T) {
 		t.Fatalf("unexpected transaction: %+v", fetched)
 	}
 
-	providerResponse, providerBody := doJSON(t, client, http.MethodGet, server.URL+"/providers/provider-a/wagering/transactions/http-bet-1", nil, nil)
+	providerResponse, providerBody := doJSON(t, client, http.MethodGet, server.URL+"/providers/provider-a/wagering/transactions/http-bet-1", providerHeaders, nil)
 	if providerResponse.StatusCode != http.StatusOK {
 		t.Fatalf("get provider transaction status = %d, body = %s", providerResponse.StatusCode, providerBody)
 	}
@@ -369,23 +361,23 @@ func TestWageringHTTPContract(t *testing.T) {
 		t.Fatalf("conflict status = %d, want 409", conflictResponse.StatusCode)
 	}
 
-	missingKeyResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", nil, body)
+	missingKeyResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", providerHeaders, body)
 	if missingKeyResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("missing key status = %d, want 400", missingKeyResponse.StatusCode)
 	}
 
-	lossResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:http-loss-invalid"}, processRequestBody("provider-a", "http-loss-invalid", playerID.String(), wallet.ID, "round-1", "game-1", "LOSS", "1.00", ""))
+	lossResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:http-loss-invalid"}), processRequestBody("provider-a", "http-loss-invalid", playerID.String(), wallet.ID, "round-1", "game-1", "LOSS", "1.00", ""))
 	if lossResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("loss non-zero status = %d, want 400", lossResponse.StatusCode)
 	}
 
-	openingResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:http-opening"}, processRequestBody("provider-a", "http-opening", playerID.String(), wallet.ID, "round-1", "game-1", "OPENING", "1.00", ""))
+	openingResponse, _ := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:http-opening"}), processRequestBody("provider-a", "http-opening", playerID.String(), wallet.ID, "round-1", "game-1", "OPENING", "1.00", ""))
 	if openingResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("opening status = %d, want 400", openingResponse.StatusCode)
 	}
 
 	secondWallet := createTestWallet(t, context.Background(), walletService, uuid.New(), "10.00")
-	insufficientResponse, insufficientBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", map[string]string{"Idempotency-Key": "provider-a:http-insufficient"}, processRequestBody("provider-a", "http-insufficient", secondWallet.PlayerID().String(), secondWallet.ID().String(), "round-1", "game-1", "BET", "20.00", ""))
+	insufficientResponse, insufficientBody := doJSON(t, client, http.MethodPost, server.URL+"/wagering/transactions", mergeHeaders(providerHeaders, map[string]string{"Idempotency-Key": "provider-a:http-insufficient"}), processRequestBody("provider-a", "http-insufficient", secondWallet.PlayerID().String(), secondWallet.ID().String(), "round-1", "game-1", "BET", "20.00", ""))
 	if insufficientResponse.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("insufficient status = %d, body = %s", insufficientResponse.StatusCode, insufficientBody)
 	}

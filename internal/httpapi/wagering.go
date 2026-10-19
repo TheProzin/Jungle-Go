@@ -11,6 +11,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
+	infraauth "github.com/TheProzin/Jungle-Go/internal/infra/auth"
 )
 
 type WageringHandler struct {
@@ -125,6 +126,12 @@ func (h *WageringHandler) Process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	principal := PrincipalFromContext(r.Context())
+	if principal == nil || principal.ProviderID != request.ProviderID {
+		writeAPIError(w, http.StatusForbidden, "FORBIDDEN_PROVIDER", "providerId does not match authenticated identity")
+		return
+	}
+
 	correlationID := r.Header.Get("X-Correlation-Id")
 	if correlationID == "" {
 		correlationID = uuid.NewString()
@@ -184,6 +191,11 @@ func (h *WageringHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !canAccessTransaction(PrincipalFromContext(r.Context()), transaction) {
+		writeAPIError(w, http.StatusForbidden, "FORBIDDEN_PROVIDER", "transaction belongs to another provider")
+		return
+	}
+
 	writeJSON(w, http.StatusOK, toTransactionResponse(transaction))
 }
 
@@ -195,6 +207,12 @@ func (h *WageringHandler) GetByProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	principal := PrincipalFromContext(r.Context())
+	if principal == nil || (!principal.HasRole("internal") && principal.ProviderID != providerID) {
+		writeAPIError(w, http.StatusForbidden, "FORBIDDEN_PROVIDER", "providerId does not match authenticated identity")
+		return
+	}
+
 	transaction, err := h.service.GetProviderTransaction(r.Context(), providerID, externalTransactionID)
 	if err != nil {
 		writeWageringServiceError(w, err)
@@ -202,6 +220,17 @@ func (h *WageringHandler) GetByProvider(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, toTransactionResponse(transaction))
+}
+
+func canAccessTransaction(principal *infraauth.Principal, transaction *domainwagering.Transaction) bool {
+	if principal == nil {
+		return false
+	}
+	if principal.HasRole("internal") {
+		return true
+	}
+	providerID := transaction.ProviderID()
+	return providerID != nil && *providerID == principal.ProviderID
 }
 
 func toTransactionResponse(transaction *domainwagering.Transaction) transactionResponse {

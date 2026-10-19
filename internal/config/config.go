@@ -40,6 +40,12 @@ type Config struct {
 	ReferenceInitialBackoff time.Duration
 	ReferenceMaxBackoff     time.Duration
 	ReferenceWorkerInterval time.Duration
+
+	OutboxBatchSize         int
+	OutboxLease             time.Duration
+	OutboxInitialBackoff    time.Duration
+	OutboxMaxBackoff        time.Duration
+	OutboxPublisherInterval time.Duration
 }
 
 func Load() (*Config, error) {
@@ -69,6 +75,11 @@ func Load() (*Config, error) {
 		ReferenceInitialBackoff:   envDuration("REFERENCE_INITIAL_BACKOFF", time.Second),
 		ReferenceMaxBackoff:       envDuration("REFERENCE_MAX_BACKOFF", 5*time.Minute),
 		ReferenceWorkerInterval:   envDuration("REFERENCE_WORKER_INTERVAL", time.Second),
+		OutboxBatchSize:           envInt("OUTBOX_BATCH_SIZE", 20),
+		OutboxLease:               envDuration("OUTBOX_LEASE", 30*time.Second),
+		OutboxInitialBackoff:      envDuration("OUTBOX_INITIAL_BACKOFF", time.Second),
+		OutboxMaxBackoff:          envDuration("OUTBOX_MAX_BACKOFF", 5*time.Minute),
+		OutboxPublisherInterval:   envDuration("OUTBOX_PUBLISHER_INTERVAL", time.Second),
 	}
 
 	var errs []error
@@ -86,6 +97,18 @@ func Load() (*Config, error) {
 	}
 	if cfg.SQSTransactionsDLQURL == "" {
 		errs = append(errs, fmt.Errorf("SQS_TRANSACTIONS_DLQ_URL is required"))
+	}
+	if cfg.SQSEventsQueueURL == "" {
+		errs = append(errs, fmt.Errorf("SQS_EVENTS_QUEUE_URL is required"))
+	}
+	if cfg.KeycloakIssuer == "" {
+		errs = append(errs, fmt.Errorf("KEYCLOAK_ISSUER is required"))
+	}
+	if cfg.KeycloakJWKSURL == "" {
+		errs = append(errs, fmt.Errorf("KEYCLOAK_JWKS_URL is required"))
+	}
+	if cfg.KeycloakAudience == "" {
+		errs = append(errs, fmt.Errorf("KEYCLOAK_AUDIENCE is required"))
 	}
 	if cfg.SQSConsumerMaxMessages < 1 || cfg.SQSConsumerMaxMessages > 10 {
 		errs = append(errs, fmt.Errorf("SQS_CONSUMER_MAX_MESSAGES must be between 1 and 10"))
@@ -119,6 +142,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.ReferenceWorkerInterval <= 0 {
 		errs = append(errs, fmt.Errorf("REFERENCE_WORKER_INTERVAL must be positive"))
+	}
+	if cfg.OutboxBatchSize < 1 || cfg.OutboxBatchSize > 100 {
+		errs = append(errs, fmt.Errorf("OUTBOX_BATCH_SIZE must be between 1 and 100"))
+	}
+	if cfg.OutboxLease <= 0 {
+		errs = append(errs, fmt.Errorf("OUTBOX_LEASE must be positive"))
+	}
+	if cfg.OutboxInitialBackoff <= 0 {
+		errs = append(errs, fmt.Errorf("OUTBOX_INITIAL_BACKOFF must be positive"))
+	}
+	if cfg.OutboxMaxBackoff < cfg.OutboxInitialBackoff {
+		errs = append(errs, fmt.Errorf("OUTBOX_MAX_BACKOFF must be at least OUTBOX_INITIAL_BACKOFF"))
+	}
+	if cfg.OutboxPublisherInterval <= 0 {
+		errs = append(errs, fmt.Errorf("OUTBOX_PUBLISHER_INTERVAL must be positive"))
 	}
 
 	if err := errors.Join(errs...); err != nil {
