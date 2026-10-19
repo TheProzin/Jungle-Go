@@ -20,8 +20,13 @@ type Config struct {
 	AWSAccessKeyID     string
 	AWSSecretAccessKey string
 
-	SQSTransactionsQueueURL string
-	SQSEventsQueueURL       string
+	SQSTransactionsQueueURL   string
+	SQSTransactionsDLQURL     string
+	SQSEventsQueueURL         string
+	SQSConsumerMaxMessages    int
+	SQSConsumerWaitTime       time.Duration
+	SQSConsumerInitialBackoff time.Duration
+	SQSConsumerMaxBackoff     time.Duration
 
 	KeycloakIssuer   string
 	KeycloakJWKSURL  string
@@ -39,26 +44,31 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Env:                     env("APP_ENV", "local"),
-		Port:                    envInt("APP_PORT", 8080),
-		LogLevel:                env("LOG_LEVEL", "info"),
-		DatabaseURL:             os.Getenv("DATABASE_URL"),
-		AWSRegion:               env("AWS_REGION", "us-east-1"),
-		AWSEndpoint:             os.Getenv("AWS_ENDPOINT_URL"),
-		AWSAccessKeyID:          os.Getenv("AWS_ACCESS_KEY_ID"),
-		AWSSecretAccessKey:      os.Getenv("AWS_SECRET_ACCESS_KEY"),
-		SQSTransactionsQueueURL: os.Getenv("SQS_TRANSACTIONS_QUEUE_URL"),
-		SQSEventsQueueURL:       os.Getenv("SQS_EVENTS_QUEUE_URL"),
-		KeycloakIssuer:          os.Getenv("KEYCLOAK_ISSUER"),
-		KeycloakJWKSURL:         os.Getenv("KEYCLOAK_JWKS_URL"),
-		KeycloakAudience:        os.Getenv("KEYCLOAK_AUDIENCE"),
-		ShutdownTimeout:         envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
-		ReadinessTimeout:        envDuration("READINESS_TIMEOUT", 2*time.Second),
-		ReferenceMaxAttempts:    envInt("REFERENCE_MAX_ATTEMPTS", 10),
-		ReferenceTTL:            envDuration("REFERENCE_TTL", time.Hour),
-		ReferenceInitialBackoff: envDuration("REFERENCE_INITIAL_BACKOFF", time.Second),
-		ReferenceMaxBackoff:     envDuration("REFERENCE_MAX_BACKOFF", 5*time.Minute),
-		ReferenceWorkerInterval: envDuration("REFERENCE_WORKER_INTERVAL", time.Second),
+		Env:                       env("APP_ENV", "local"),
+		Port:                      envInt("APP_PORT", 8080),
+		LogLevel:                  env("LOG_LEVEL", "info"),
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		AWSRegion:                 env("AWS_REGION", "us-east-1"),
+		AWSEndpoint:               os.Getenv("AWS_ENDPOINT_URL"),
+		AWSAccessKeyID:            os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretAccessKey:        os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		SQSTransactionsQueueURL:   os.Getenv("SQS_TRANSACTIONS_QUEUE_URL"),
+		SQSTransactionsDLQURL:     os.Getenv("SQS_TRANSACTIONS_DLQ_URL"),
+		SQSEventsQueueURL:         os.Getenv("SQS_EVENTS_QUEUE_URL"),
+		SQSConsumerMaxMessages:    envInt("SQS_CONSUMER_MAX_MESSAGES", 10),
+		SQSConsumerWaitTime:       envDuration("SQS_CONSUMER_WAIT_TIME", 20*time.Second),
+		SQSConsumerInitialBackoff: envDuration("SQS_CONSUMER_INITIAL_BACKOFF", time.Second),
+		SQSConsumerMaxBackoff:     envDuration("SQS_CONSUMER_MAX_BACKOFF", 5*time.Minute),
+		KeycloakIssuer:            os.Getenv("KEYCLOAK_ISSUER"),
+		KeycloakJWKSURL:           os.Getenv("KEYCLOAK_JWKS_URL"),
+		KeycloakAudience:          os.Getenv("KEYCLOAK_AUDIENCE"),
+		ShutdownTimeout:           envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ReadinessTimeout:          envDuration("READINESS_TIMEOUT", 2*time.Second),
+		ReferenceMaxAttempts:      envInt("REFERENCE_MAX_ATTEMPTS", 10),
+		ReferenceTTL:              envDuration("REFERENCE_TTL", time.Hour),
+		ReferenceInitialBackoff:   envDuration("REFERENCE_INITIAL_BACKOFF", time.Second),
+		ReferenceMaxBackoff:       envDuration("REFERENCE_MAX_BACKOFF", 5*time.Minute),
+		ReferenceWorkerInterval:   envDuration("REFERENCE_WORKER_INTERVAL", time.Second),
 	}
 
 	var errs []error
@@ -73,6 +83,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.SQSTransactionsQueueURL == "" {
 		errs = append(errs, fmt.Errorf("SQS_TRANSACTIONS_QUEUE_URL is required"))
+	}
+	if cfg.SQSTransactionsDLQURL == "" {
+		errs = append(errs, fmt.Errorf("SQS_TRANSACTIONS_DLQ_URL is required"))
+	}
+	if cfg.SQSConsumerMaxMessages < 1 || cfg.SQSConsumerMaxMessages > 10 {
+		errs = append(errs, fmt.Errorf("SQS_CONSUMER_MAX_MESSAGES must be between 1 and 10"))
+	}
+	if cfg.SQSConsumerWaitTime < 0 {
+		errs = append(errs, fmt.Errorf("SQS_CONSUMER_WAIT_TIME cannot be negative"))
+	}
+	if cfg.SQSConsumerInitialBackoff <= 0 {
+		errs = append(errs, fmt.Errorf("SQS_CONSUMER_INITIAL_BACKOFF must be positive"))
+	}
+	if cfg.SQSConsumerMaxBackoff < cfg.SQSConsumerInitialBackoff {
+		errs = append(errs, fmt.Errorf("SQS_CONSUMER_MAX_BACKOFF must be at least SQS_CONSUMER_INITIAL_BACKOFF"))
 	}
 	if cfg.ShutdownTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT must be positive"))

@@ -20,7 +20,14 @@ import (
 var (
 	ErrInvalidCommand    = errors.New("invalid transaction command")
 	ErrReferenceRequired = errors.New("reference is required")
+	ErrDuplicateMessage  = errors.New("duplicate inbox message")
+	ErrInboxHashMismatch = errors.New("inbox payload hash mismatch")
 )
+
+type InboxIdentity struct {
+	ConsumerName string
+	MessageID    string
+}
 
 type Service struct {
 	uow   ports.UnitOfWork
@@ -85,6 +92,29 @@ func newService(
 }
 
 func (s *Service) ProcessTransaction(ctx context.Context, cmd ProcessCommand) (*ProcessResult, error) {
+	return s.processTransaction(ctx, cmd, nil)
+}
+
+func (s *Service) ProcessTransactionWithInbox(
+	ctx context.Context,
+	cmd ProcessCommand,
+	identity InboxIdentity,
+) (*ProcessResult, error) {
+	return s.processTransaction(ctx, cmd, &identity)
+}
+
+func (s *Service) MarkInboxFailed(ctx context.Context, consumerName, messageID, reason string) error {
+	now := s.now()
+	return s.uow.Do(ctx, func(repos ports.Repositories) error {
+		return repos.Inbox.MarkFailed(ctx, consumerName, messageID, reason, now)
+	})
+}
+
+func (s *Service) processTransaction(
+	ctx context.Context,
+	cmd ProcessCommand,
+	inbox *InboxIdentity,
+) (*ProcessResult, error) {
 	if err := validateCommand(cmd); err != nil {
 		return nil, err
 	}
@@ -109,12 +139,34 @@ func (s *Service) ProcessTransaction(ctx context.Context, cmd ProcessCommand) (*
 	)
 
 	err = s.uow.Do(ctx, func(repos ports.Repositories) error {
+		if inbox != nil {
+			inserted, existingHash, err := repos.Inbox.Insert(
+				ctx,
+				inbox.ConsumerName,
+				inbox.MessageID,
+				hash,
+				now,
+			)
+			if err != nil {
+				return err
+			}
+			if !inserted {
+				if existingHash != hash {
+					return ErrInboxHashMismatch
+				}
+				return ErrDuplicateMessage
+			}
+		}
+
 		found, err := findExisting(ctx, repos, cmd, hash)
 		if err != nil {
 			return err
 		}
 		if found != nil {
 			existing = found
+			if inbox != nil {
+				return repos.Inbox.Complete(ctx, inbox.ConsumerName, inbox.MessageID, now)
+			}
 			return nil
 		}
 
@@ -123,10 +175,20 @@ func (s *Service) ProcessTransaction(ctx context.Context, cmd ProcessCommand) (*
 			return err
 		}
 		created = transaction
+
+		if inbox != nil {
+			return repos.Inbox.Complete(ctx, inbox.ConsumerName, inbox.MessageID, now)
+		}
 		return nil
 	})
 
+	if errors.Is(err, ErrDuplicateMessage) || errors.Is(err, ErrInboxHashMismatch) {
+		return nil, err
+	}
 	if errors.Is(err, domainwagering.ErrDuplicateIdentity) {
+		if inbox != nil {
+			return s.replayWithInbox(ctx, cmd, *inbox, hash)
+		}
 		return s.replay(ctx, cmd, hash)
 	}
 	if err != nil {
@@ -136,6 +198,50 @@ func (s *Service) ProcessTransaction(ctx context.Context, cmd ProcessCommand) (*
 		return replayResult(existing), nil
 	}
 	return resultFor(created, false), nil
+}
+
+func (s *Service) replayWithInbox(
+	ctx context.Context,
+	cmd ProcessCommand,
+	inbox InboxIdentity,
+	hash string,
+) (*ProcessResult, error) {
+	now := s.now()
+	var result *ProcessResult
+
+	err := s.uow.Do(ctx, func(repos ports.Repositories) error {
+		inserted, existingHash, err := repos.Inbox.Insert(
+			ctx,
+			inbox.ConsumerName,
+			inbox.MessageID,
+			hash,
+			now,
+		)
+		if err != nil {
+			return err
+		}
+		if !inserted && existingHash != hash {
+			return ErrInboxHashMismatch
+		}
+
+		found, err := findExisting(ctx, repos, cmd, hash)
+		if err != nil {
+			return err
+		}
+		if found == nil {
+			return domainwagering.ErrDuplicateIdentity
+		}
+
+		result = replayResult(found)
+		if inserted {
+			return repos.Inbox.Complete(ctx, inbox.ConsumerName, inbox.MessageID, now)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *Service) GetTransaction(ctx context.Context, transactionID uuid.UUID) (*domainwagering.Transaction, error) {

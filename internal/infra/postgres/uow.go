@@ -47,6 +47,7 @@ func (u *UnitOfWork) run(ctx context.Context, options pgx.TxOptions, fn func(por
 		Transactions: &TransactionRepository{query: tx},
 		Ledger:       &LedgerRepository{query: tx},
 		Outbox:       &OutboxRepository{query: tx},
+		Inbox:        &InboxRepository{query: tx},
 	}
 
 	if err := fn(repositories); err != nil {

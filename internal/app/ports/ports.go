@@ -46,11 +46,18 @@ type OutboxRepository interface {
 	Insert(ctx context.Context, event events.Event) error
 }
 
+type InboxRepository interface {
+	Insert(ctx context.Context, consumerName, messageID, payloadHash string, receivedAt time.Time) (inserted bool, existingHash string, err error)
+	Complete(ctx context.Context, consumerName, messageID string, completedAt time.Time) error
+	MarkFailed(ctx context.Context, consumerName, messageID, reason string, completedAt time.Time) error
+}
+
 type Repositories struct {
 	Wallets      WalletRepository
 	Transactions TransactionRepository
 	Ledger       LedgerRepository
 	Outbox       OutboxRepository
+	Inbox        InboxRepository
 }
 
 type UnitOfWork interface {

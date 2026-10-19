@@ -74,7 +74,12 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
       SQS_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      SQS_TRANSACTIONS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
       SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+      SQS_CONSUMER_MAX_MESSAGES: ${SQS_CONSUMER_MAX_MESSAGES:-10}
+      SQS_CONSUMER_WAIT_TIME: ${SQS_CONSUMER_WAIT_TIME:-20s}
+      SQS_CONSUMER_INITIAL_BACKOFF: ${SQS_CONSUMER_INITIAL_BACKOFF:-1s}
+      SQS_CONSUMER_MAX_BACKOFF: ${SQS_CONSUMER_MAX_BACKOFF:-5m}
       KEYCLOAK_ISSUER: http://localhost:8081/realms/jungle-go
       KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/jungle-go/protocol/openid-connect/certs
       KEYCLOAK_AUDIENCE: wager-api
