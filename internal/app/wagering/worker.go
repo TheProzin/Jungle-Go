@@ -40,6 +40,7 @@ func (w *ReferenceWorker) Run(ctx context.Context) {
 				break
 			}
 		}
+		w.service.RefreshReferenceMetrics(ctx)
 
 		select {
 		case <-ctx.Done():

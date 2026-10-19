@@ -7,6 +7,7 @@ import (
 
 	"github.com/TheProzin/Jungle-Go/internal/app/ports"
 	"github.com/TheProzin/Jungle-Go/internal/config"
+	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
 type Sender interface {
@@ -83,6 +84,7 @@ func (p *Publisher) PublishBatch(ctx context.Context) (int, error) {
 	published := 0
 	for _, event := range events {
 		if err := p.sender.Send(ctx, event); err != nil {
+			observability.Default.RecordOutboxFailure()
 			p.logger.Error(
 				"outbox event publish failed",
 				"eventId", event.ID.String(),
@@ -93,10 +95,29 @@ func (p *Publisher) PublishBatch(ctx context.Context) (int, error) {
 			p.markFailed(event, err)
 			continue
 		}
+		observability.Default.RecordOutboxPublishLatency(time.Since(event.OccurredAt))
 		p.markPublished(event)
 		published++
 	}
+
+	p.refreshPending()
 	return published, nil
+}
+
+func (p *Publisher) refreshPending() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var count int
+	if err := p.uow.DoRead(ctx, func(repos ports.Repositories) error {
+		var err error
+		count, err = repos.Outbox.CountPending(ctx)
+		return err
+	}); err != nil {
+		p.logger.Warn("refresh outbox pending metric", "error", err)
+		return
+	}
+	observability.Default.SetOutboxPending(count)
 }
 
 func (p *Publisher) markPublished(event ports.OutboxEvent) {

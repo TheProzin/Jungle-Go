@@ -173,6 +173,16 @@ func (r *TransactionRepository) FindNextPendingReferenceForUpdate(ctx context.Co
 	return transaction, err
 }
 
+func (r *TransactionRepository) CountPendingReferences(ctx context.Context) (int, error) {
+	var count int
+	if err := r.query.QueryRow(ctx, `
+		SELECT COUNT(*) FROM wager_transactions WHERE status = 'PENDING_REFERENCE'
+	`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count pending references: %w", err)
+	}
+	return count, nil
+}
+
 func (r *TransactionRepository) ExistsSuccessfulReversal(ctx context.Context, referenceTransactionID uuid.UUID) (bool, error) {
 	var exists bool
 	err := r.query.QueryRow(ctx, `

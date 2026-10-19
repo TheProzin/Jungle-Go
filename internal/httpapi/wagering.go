@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -132,7 +133,10 @@ func (h *WageringHandler) Process(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correlationID := r.Header.Get("X-Correlation-Id")
+	correlationID := CorrelationIDFromContext(r.Context())
+	if correlationID == "" {
+		correlationID = r.Header.Get("X-Correlation-Id")
+	}
 	if correlationID == "" {
 		correlationID = uuid.NewString()
 	}
@@ -164,6 +168,19 @@ func (h *WageringHandler) Process(w http.ResponseWriter, r *http.Request) {
 	if failureCode := result.Transaction.FailureCode(); failureCode != nil {
 		response.FailureCode = *failureCode
 	}
+
+	fields := []any{
+		"transactionId", response.TransactionID,
+		"walletId", result.Transaction.WalletID().String(),
+		"providerId", request.ProviderID,
+		"status", response.Status,
+		"idempotentReplay", response.IdempotentReplay,
+		"correlationId", correlationID,
+	}
+	if response.FailureCode != "" {
+		fields = append(fields, "failureCode", response.FailureCode)
+	}
+	slog.Default().Info("wagering transaction", fields...)
 
 	status := http.StatusOK
 	if result.Transaction.Status() == domainwagering.StatusRejected ||

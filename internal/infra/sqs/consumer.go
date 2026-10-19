@@ -16,6 +16,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
+	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
 const consumerName = "wager-transactions-consumer"
@@ -65,6 +66,7 @@ func (c *Consumer) Run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			observability.Default.RecordSQSMessage("receive_error")
 			c.logger.Error("sqs receive failed", "error", err)
 			select {
 			case <-ctx.Done():
@@ -96,6 +98,7 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 	body := aws.ToString(message.Body)
 	envelope, err := ParseEnvelope([]byte(body))
 	if err != nil {
+		observability.Default.RecordSQSMessage("invalid")
 		c.logger.Error(
 			"invalid sqs message",
 			"sqsMessageId", aws.ToString(message.MessageId),
@@ -107,6 +110,7 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 
 	command, err := envelope.Command()
 	if err != nil {
+		observability.Default.RecordSQSMessage("invalid")
 		c.logger.Error(
 			"invalid sqs message data",
 			"messageId", envelope.MessageID,
@@ -137,10 +141,12 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 
 	switch {
 	case errors.Is(err, wageringapp.ErrDuplicateMessage):
+		observability.Default.RecordSQSMessage("duplicate")
 		logger.Info("duplicate message ignored")
 		c.deleteMessage(message)
 		return
 	case errors.Is(err, wageringapp.ErrInboxHashMismatch):
+		observability.Default.RecordSQSMessage("hash_mismatch")
 		logger.Error("inbox payload hash mismatch")
 		c.markFailed(envelope.MessageID, "inbox payload hash mismatch")
 		c.sendToDLQAndDelete(message, "inbox payload hash mismatch")
@@ -151,11 +157,14 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 			return
 		}
 		if isPermanent(err) {
+			observability.Default.RecordSQSMessage("permanent_failure")
 			logger.Error("permanent message failure", "error", err)
 			c.markFailed(envelope.MessageID, err.Error())
 			c.sendToDLQAndDelete(message, err.Error())
 			return
 		}
+		observability.Default.RecordSQSMessage("transient_failure")
+		observability.Default.RecordSQSRetry()
 		logger.Error("transient message failure", "error", err)
 		c.backoffMessage(message)
 		return
@@ -168,6 +177,7 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 	if failureCode := result.Transaction.FailureCode(); failureCode != nil {
 		fields = append(fields, "failureCode", *failureCode)
 	}
+	observability.Default.RecordSQSMessage(string(result.Transaction.Status()))
 	logger.Info("message processed", fields...)
 	c.deleteMessage(message)
 }
@@ -267,6 +277,8 @@ func (c *Consumer) sendToDLQAndDelete(message types.Message, reason string) {
 		return
 	}
 
+	observability.Default.RecordDLQMessage()
+	observability.Default.RecordSQSMessage("dlq")
 	c.deleteMessage(message)
 }
 

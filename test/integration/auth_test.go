@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +152,53 @@ func TestAuthenticationAndAuthorization(t *testing.T) {
 
 	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE provider_id = 'provider-b' AND external_transaction_id = '`+providerBExternalID+`'`, 1)
 	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE external_transaction_id LIKE 'auth-forbidden-%'`, 0)
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	pool := newTestPool(t)
+	unitOfWork := postgres.NewUnitOfWork(pool)
+	walletService := walletapp.NewService(unitOfWork)
+	wageringService := wageringapp.NewService(unitOfWork)
+	server := newTestHTTPServer(t, pool, walletService, wageringService)
+	defer server.Close()
+	client := server.Client()
+
+	internal := authHeaders(internalToken(t))
+	provider := authHeaders(providerAToken(t))
+
+	createResponse, createBody := doJSON(t, client, http.MethodPost, server.URL+"/wallets", internal, map[string]any{
+		"playerId":       uuid.New().String(),
+		"initialBalance": map[string]string{"amount": "10.00", "currency": "BRL"},
+	})
+	if createResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("create wallet status = %d, body = %s", createResponse.StatusCode, createBody)
+	}
+
+	noTokenResponse, _ := doJSON(t, client, http.MethodGet, server.URL+"/metrics", nil, nil)
+	if noTokenResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("metrics without token status = %d, want 401", noTokenResponse.StatusCode)
+	}
+
+	providerResponse, _ := doJSON(t, client, http.MethodGet, server.URL+"/metrics", provider, nil)
+	if providerResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("metrics with provider token status = %d, want 403", providerResponse.StatusCode)
+	}
+
+	response, body := doJSON(t, client, http.MethodGet, server.URL+"/metrics", internal, nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, body = %s", response.StatusCode, body)
+	}
+	text := string(body)
+	for _, metric := range []string{
+		"wager_transactions_total",
+		"wager_outbox_pending",
+		"wager_request_duration_seconds",
+		"wager_reconciliation_divergences_total",
+	} {
+		if !strings.Contains(text, metric) {
+			t.Fatalf("metrics body does not contain %q", metric)
+		}
+	}
 }
 
 func TestExpiredTokenIsRejected(t *testing.T) {

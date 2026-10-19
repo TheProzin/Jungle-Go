@@ -20,5 +20,7 @@ func NewLogger(cfg *config.Config) *slog.Logger {
 	}
 
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	return slog.New(handler).With("service", "jungle-go", "env", cfg.Env)
+	logger := slog.New(handler).With("service", "jungle-go", "env", cfg.Env)
+	slog.SetDefault(logger)
+	return logger
 }

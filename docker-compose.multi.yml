@@ -1,0 +1,62 @@
+x-app-environment: &app-environment
+  APP_ENV: local
+  APP_PORT: 8080
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://${POSTGRES_USER:-jungle}:${POSTGRES_PASSWORD:-jungle}@postgres:5432/${POSTGRES_DB:-jungle}?sslmode=disable
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+  SQS_TRANSACTIONS_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+  SQS_TRANSACTIONS_DLQ_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+  SQS_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/wager-events.fifo
+  SQS_CONSUMER_MAX_MESSAGES: ${SQS_CONSUMER_MAX_MESSAGES:-10}
+  SQS_CONSUMER_WAIT_TIME: ${SQS_CONSUMER_WAIT_TIME:-20s}
+  SQS_CONSUMER_INITIAL_BACKOFF: ${SQS_CONSUMER_INITIAL_BACKOFF:-1s}
+  SQS_CONSUMER_MAX_BACKOFF: ${SQS_CONSUMER_MAX_BACKOFF:-5m}
+  KEYCLOAK_ISSUER: http://localhost:8081/realms/jungle-go
+  KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/jungle-go/protocol/openid-connect/certs
+  KEYCLOAK_AUDIENCE: wager-api
+  REFERENCE_MAX_ATTEMPTS: ${REFERENCE_MAX_ATTEMPTS:-10}
+  REFERENCE_TTL: ${REFERENCE_TTL:-1h}
+  REFERENCE_INITIAL_BACKOFF: ${REFERENCE_INITIAL_BACKOFF:-1s}
+  REFERENCE_MAX_BACKOFF: ${REFERENCE_MAX_BACKOFF:-5m}
+  REFERENCE_WORKER_INTERVAL: ${REFERENCE_WORKER_INTERVAL:-1s}
+  OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-20}
+  OUTBOX_LEASE: ${OUTBOX_LEASE:-30s}
+  OUTBOX_INITIAL_BACKOFF: ${OUTBOX_INITIAL_BACKOFF:-1s}
+  OUTBOX_MAX_BACKOFF: ${OUTBOX_MAX_BACKOFF:-5m}
+  OUTBOX_PUBLISHER_INTERVAL: ${OUTBOX_PUBLISHER_INTERVAL:-1s}
+  SHUTDOWN_TIMEOUT: 20s
+  READINESS_TIMEOUT: 2s
+
+x-app-service: &app-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  environment: *app-environment
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    localstack:
+      condition: service_healthy
+    keycloak:
+      condition: service_started
+
+services:
+  app-1:
+    <<: *app-service
+    ports:
+      - "8090:8080"
+
+  app-2:
+    <<: *app-service
+    ports:
+      - "8091:8080"
+
+  app-3:
+    <<: *app-service
+    ports:
+      - "8092:8080"

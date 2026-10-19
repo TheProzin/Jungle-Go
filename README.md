@@ -1,330 +1,355 @@
-# Desafio Backend — Processamento Distribuído de Apostas em Go
+# Jungle-Go — Processamento Distribuído de Apostas
 
-Implemente um serviço em **Go**, com **Uber Fx**, para processar operações financeiras de provedores de jogos em um ambiente distribuído.
+Serviço em Go com Uber Fx para processar operações financeiras de provedores de jogos em ambiente distribuído.
 
-## 1. Objetivo
+O sistema oferece:
 
-A aplicação deve oferecer uma API HTTP e um consumidor de mensagens que movimentem carteiras de jogadores com garantias equivalentes. Demonstre que o resultado financeiro continua correto com várias instâncias em execução e falhas entre as etapas do processamento.
+- API HTTP autenticada por Keycloak/OIDC
+- Consumidor SQS FIFO com inbox transacional
+- Ledger append-only com constraints e triggers
+- Idempotência persistente
+- Concorrência por carteira com locks pessimistas
+- Reversões com referências pendentes
+- Transactional outbox com publicação concorrente
+- Métricas Prometheus, logs JSON e health checks
 
-A avaliação considera precisão monetária, integridade do ledger, idempotência persistente, concorrência, recuperação de falhas e decisões de arquitetura.
+O enunciado original está preservado em [`docs/CHALLENGE.md`](docs/CHALLENGE.md).
+As decisões técnicas estão em [`ARCHITECTURE.md`](ARCHITECTURE.md).
+O plano de implementação está em [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
-## 2. Autenticação e autorização
+---
 
-Autenticação e autorização são **obrigatórias**, com integração a um IdP externo OAuth 2.0/OIDC.
-
-Recomenda-se **Keycloak** no Docker Compose e `client_credentials` para comunicação entre serviços. A escolha do IdP, a validação de credenciais e o modelo de permissões devem ser justificados em `ARCHITECTURE.md`. Cadastro de senhas e emissão própria de tokens estão fora do escopo.
-
-A identidade autenticada deve determinar o `providerId` autorizado. Provedores acessam apenas suas próprias transações, inclusive em replays; operações de carteira são restritas ao serviço interno.
-
-O acesso à mensageria deve ser controlado por credenciais e políticas do broker, preservando as validações de domínio no consumidor.
-
-## 3. Ambiente de execução e falhas
-
-Cada operação externa pertence a um jogador, uma carteira, um jogo, um provedor e uma rodada. Os tipos externos são `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`.
-
-Assuma entrega **at-least-once** e prepare a solução para:
-
-- recebimento repetido de uma mesma operação, inclusive por HTTP e SQS;
-- chegada de uma reversão antes da transação que ela referencia;
-- processamento simultâneo de operações da mesma carteira;
-- encerramento abrupto antes ou depois de um commit;
-- publicação repetida de um evento de integração;
-- indisponibilidade temporária do PostgreSQL ou do SQS.
-
-Nenhuma dessas situações pode gerar movimentação duplicada, saldo negativo ou perda de um evento cujo registro foi confirmado no banco.
-
-## 4. Stack
-
-### Tecnologias obrigatórias
+## Stack
 
 | Responsabilidade | Tecnologia |
 | --- | --- |
-| Linguagem e compilação | Go; declare a versão utilizada em `go.mod` e no Dockerfile |
-| Dependências | Go Modules, com `go.mod` e `go.sum` versionados |
-| Composição da aplicação | Uber Fx (`go.uber.org/fx`) |
-| HTTP | `net/http` ou um roteador Go à sua escolha |
-| Autenticação | IdP externo OAuth 2.0/OIDC; Keycloak recomendado |
-| Persistência | PostgreSQL |
-| Mensageria | AWS SQS, executado localmente com LocalStack ou MiniStack |
-| Ambiente local | Docker Compose |
-| Evolução do banco | Migrations versionadas, com aplicação e reversão documentadas |
-| Testes | `testing` e `go test`, incluindo execução com `-race` |
+| Linguagem | Go 1.27 |
+| Composição | Uber Fx |
+| HTTP | `net/http` |
+| Banco | PostgreSQL 16 + pgx/v5 |
+| Migrations | golang-migrate com arquivos embutidos |
+| Mensageria | AWS SDK v2 + LocalStack SQS FIFO |
+| Autenticação | Keycloak OIDC + JWKS |
+| Métricas | Prometheus |
+| Ambiente | Docker Compose |
 
-### Acesso ao banco
+---
 
-`pgx` com SQL explícito é preferencial; `sqlc` é opcional. `database/sql` e GORM são aceitos. Transações, locks e constraints devem permanecer explícitos e verificáveis.
+## Pré-requisitos
 
-Documente em `ARCHITECTURE.md` a biblioteca escolhida, o mapeamento de `Money` e a delimitação da transação SQL entre os repositórios.
+- Go 1.27+
+- Docker 24+
+- Docker Compose v2+
+- Portas livres: `8080`, `8081`, `5432`, `4566`
 
-### Composição e ciclo de vida
+---
 
-Use Uber Fx na composição de configuração, conexões, repositórios, casos de uso, handlers e workers, com injeção por construtores e organização por `fx.Module`, `fx.Provide` e `fx.Invoke`.
+## Início rápido
 
-Gerencie servidor, workers e recursos com `fx.Lifecycle`:
-
-- inicialização com validação de configuração e dependências;
-- cancelamento, prazos de execução e término observável dos workers;
-- shutdown com interrupção de novas entradas e conclusão ou liberação do trabalho em andamento;
-- fechamento das dependências após a finalização dos componentes que as utilizam.
-
-O domínio deve permanecer independente de Fx, HTTP, SQS e bibliotecas de persistência. A organização dos pacotes fica a critério do candidato.
-
-## 5. Garantias obrigatórias
-
-1. Dinheiro não pode passar por `float32` ou `float64`, nem durante parsing, cálculo, serialização ou persistência.
-2. Idempotência deve ser persistente e sobreviver ao reinício de todos os processos.
-3. As invariantes financeiras devem ser garantidas no banco, independentemente de locks locais e da deduplicação do SQS FIFO.
-4. Eventos externos só podem ser publicados depois da confirmação da transação que os originou.
-5. O ledger deve ser append-only: correções financeiras exigem novos lançamentos.
-6. Carteiras independentes devem avançar em paralelo; locks globais são proibidos.
-7. Atualizações de saldo devem impedir lost updates.
-8. Unicidade, não negatividade e imutabilidade do ledger devem ser impostas pelo schema, pelas constraints e pelos mecanismos de proteção do banco.
-
-## 6. Modelo de domínio
-
-### Encapsulamento e erros
-
-Modele entidades com estado encapsulado, construtores com validação e métodos explícitos de transição. As invariantes devem ser preservadas em todas as operações públicas.
-
-Separe criação e reidratação. A reidratação não deve reaplicar movimentações, transições ou emissão de eventos.
-
-Valores de domínio não inicializados ou inválidos devem ser rejeitados.
-
-Erros de domínio devem ser classificáveis por tipo ou `errors.Is`/`errors.As`. `panic` não deve representar rejeições de negócio. Operações de I/O devem receber `context.Context` e respeitar cancelamento e timeout.
-
-### 6.1. Money
-
-`Money` é um value object imutável, com valor e moeda. Deve suportar criação a partir de string decimal, zero por moeda, soma, subtração, negação, comparação e serialização.
-
-Use `int64` em unidades mínimas ou uma biblioteca decimal de precisão exata. Documente a representação e seus limites.
-
-- O contrato externo recebe e devolve valores como `{"amount":"25.00","currency":"BRL"}`.
-- Use escala fixa de duas casas e código de moeda ISO 4217.
-- Rejeite valores vazios, `NaN`, `Infinity`, notação científica, escala excedente e valores negativos nas entradas financeiras externas.
-- Não arredonde silenciosamente uma entrada inválida. Caso aceite formas equivalentes, documente a normalização anterior ao hash de idempotência.
-- Aritmética e comparação de valores monetários exigem moedas compatíveis.
-- Se utilizar `int64`, trate overflow no parsing, na soma, na subtração e na negação.
-- Valores negativos são permitidos em diferenças e cálculos internos, mas não no saldo da carteira.
-- A persistência deve preservar exatamente valor e moeda, por exemplo com unidades mínimas em `BIGINT` ou decimal em `NUMERIC`.
-
-É permitido operar apenas em BRL nos cenários principais, desde que o tipo carregue a moeda e existam testes de incompatibilidade entre moedas.
-
-### 6.2. Wallet
-
-A carteira é a raiz do agregado financeiro. Deve carregar identidade, jogador, moeda, saldo, versão e instantes de criação e atualização.
-
-Exponha criação, reidratação e operações de débito/crédito, mantendo a alteração do saldo sob controle do agregado e da transação SQL.
-
-- O par `(playerId, currency)` identifica uma única carteira.
-- Débitos precisam preservar saldo maior ou igual a zero.
-- A moeda de cada movimentação deve coincidir com a da carteira.
-- Cada mudança financeira exige o lançamento correspondente no ledger, confirmado junto com o saldo.
-- A versão inicial é `1`; depois da criação, incremente-a apenas quando houver mudança de saldo.
-- Disputas entre escritores não podem descartar uma atualização confirmada.
-
-A estratégia de controle de concorrência deve ser documentada.
-
-### 6.3. WagerTransaction
-
-Tipos: `OPENING`, `BET`, `WIN`, `LOSS`, `REFUND` e `ROLLBACK`.
-
-Para operações externas, a transação registra os identificadores interno e externo, provedor, chave de idempotência, hash do payload, carteira, jogador, rodada, jogo, tipo, `Money`, referência externa opcional, estado e timestamps. Quando aplicável, persista também a referência interna resolvida, o código de falha e o resultado financeiro retornado ao provedor.
-
-A transação inicia em `PENDING`. As transições para processamento, espera por referência, rejeição e falha permanente devem ser validadas pelo domínio.
-
-| Estado | Significado |
-| --- | --- |
-| `PENDING` | Registro aceito, com processamento ainda não concluído |
-| `PENDING_REFERENCE` | A aplicação depende de uma referência ainda indisponível |
-| `PROCESSED` | Operação concluída com sucesso; estado terminal |
-| `REJECTED` | Operação recusada por uma regra de negócio; estado terminal |
-| `FAILED` | Falha permanente de infraestrutura registrada para auditoria; estado terminal |
-
-Uma transação terminal não deve sofrer novas transições. Replay consulta seu resultado persistido sem reaplicar a operação. Documente a máquina de estados e como distingue falhas transitórias de falhas permanentes.
-
-Todo `PENDING` confirmado deve ter retomada durável por outra instância após uma interrupção. Operações sem dependências podem ser concluídas de forma síncrona, sem commit intermediário de aceite.
-
-`OPENING` é reservado à abertura interna de carteira. Rejeite esse tipo quando enviado por HTTP ou SQS.
-
-`OPENING` exige identidade interna estável, carteira, jogador, moeda, valor, estado e timestamps. Provedor, ID externo, chave e hash externos, rodada, jogo e referência não se aplicam a essa origem. O schema deve distinguir operações internas e externas e impedir crédito inicial duplicado.
-
-### 6.4. WalletLedgerEntry
-
-Cada lançamento registra `id`, `walletId`, `transactionId`, direção (`DEBIT` ou `CREDIT`), valor, saldo anterior, saldo posterior e instante de criação.
-
-O lançamento é imutável e sua construção deve validar `balanceAfter = balanceBefore ± money`, conforme a direção.
-
-Imponha no banco a unicidade de `(walletId, transactionId)` e a proteção contra edição ou exclusão. `LOSS` e operações rejeitadas não produzem lançamentos. Um ledger de partidas dobradas é opcional.
-
-### 6.5. Inbox e outbox
-
-| Registro | Informações e comportamento esperados |
-| --- | --- |
-| Inbox | Identidade da mensagem e do consumidor, hash, recebimento e conclusão; unicidade de `(consumerName, messageId)` |
-| Outbox | Identidade estável do evento, agregado, tipo, payload, ocorrência, tentativas, próximo envio e publicação; suporte a retry com backoff |
-
-Na entrada por SQS, o registro da inbox e a conclusão durável do tratamento devem compartilhar a transação SQL das alterações de domínio, do ledger e dos eventos correspondentes. Uma referência pendente pode ter sua mensagem de entrada concluída após a pendência estar persistida; o worker de referências assume a continuidade.
-
-## 7. Operações e referências
-
-| Tipo | Movimentação | Condição |
-| --- | --- | --- |
-| `BET` | Débito | Exige valor positivo e saldo suficiente |
-| `WIN` | Crédito | Exige valor positivo; pode informar uma aposta da mesma rodada como referência |
-| `LOSS` | Sem movimentação | Exige `money.amount` igual a `"0.00"`; não cria ledger nem altera a versão da carteira |
-| `REFUND` | Crédito | Devolve integralmente o valor de uma `BET` processada |
-| `ROLLBACK` | Movimento contrário ao original | Desfaz integralmente uma `BET`, `WIN` ou `REFUND` processada |
-
-Para `REFUND` e `ROLLBACK`, `referenceExternalTransactionId` é obrigatório e deve ser resolvido por `(providerId, referenceExternalTransactionId)`.
-
-A operação e sua referência devem concordar em provedor, jogador, carteira, moeda e rodada. O valor da reversão precisa ser igual ao valor referenciado; reversões parciais não fazem parte do desafio.
-
-Para este desafio, zero é aceito no saldo inicial e em `LOSS`; `BET`, `WIN`, `REFUND` e `ROLLBACK` exigem valor maior que zero. `LOSS` continua exigindo a moeda da carteira e, quando processado, produz `WagerTransactionProcessed`, sem `WalletBalanceChanged`.
-
-Garanta que uma referência não receba duas reversões bem-sucedidas do mesmo tipo. Documente como trata combinações de `REFUND` e `ROLLBACK` sobre a mesma aposta, preservando a coerência financeira e impedindo devolução duplicada do mesmo débito.
-
-Uma reversão que precisaria debitar mais que o saldo disponível deve ser rejeitada e auditável. Seu código de falha deve ser diferente daquele usado para uma aposta sem saldo.
-
-### Referências ainda indisponíveis
-
-Persista a operação como `PENDING_REFERENCE` quando a referência ainda não tiver chegado. Um worker deve tentar novamente com backoff exponencial, inclusive após reinicialização da aplicação.
-
-Defina um número máximo de tentativas ou TTL. Quando esgotado, finalize como `REJECTED`, informando um código de referência não encontrada e produzindo o evento de rejeição. Explique também o comportamento quando a referência existe, mas ainda está pendente ou terminou sem sucesso.
-
-Toda rejeição deve fornecer um `failureCode` estável e documentado, distinguindo entradas corrigíveis de resultados definitivos.
-
-## 8. Concorrência
-
-A coordenação deve ocorrer por carteira. Escolha locking pessimista, controle otimista com retry limitado, atualização atômica condicionada ou uma combinação justificável.
-
-As garantias devem ser demonstradas com pelo menos três processos independentes, cada um com suas próprias conexões e memória.
-
-Teste obrigatório: uma carteira com **100.00 BRL** recebe, ao mesmo tempo, duas apostas distintas de **80.00 BRL**.
-
-O resultado deve conter uma aposta processada, uma rejeição por saldo insuficiente, saldo final de **20.00 BRL** e um único débito no ledger. Reenvios não podem alterar esse resultado. Carteiras diferentes devem continuar sendo processadas em paralelo.
-
-## 9. Contratos HTTP
-
-### Abertura de carteira
-
-```http
-POST /wallets
-Content-Type: application/json
+```sh
+cp .env.example .env
+docker compose up --build
 ```
+
+O Compose inicia:
+
+| Serviço | Porta |
+| --- | --- |
+| PostgreSQL | `5432` |
+| Keycloak | `8081` |
+| LocalStack SQS | `4566` |
+| Aplicação | `8080` |
+
+O serviço `migrate` executa as migrations automaticamente antes da aplicação.
+
+Verificação:
+
+```sh
+curl http://localhost:8080/health/live
+curl http://localhost:8080/health/ready
+```
+
+Resposta esperada do readiness:
 
 ```json
-{
-  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
-  "initialBalance": { "amount": "1000.00", "currency": "BRL" }
-}
+{"checks":{"postgres":"ok","sqs":"ok"},"status":"ready"}
 ```
 
-Exemplo de resposta:
+Para encerrar:
+
+```sh
+docker compose down
+```
+
+Para remover também os volumes:
+
+```sh
+docker compose down -v
+```
+
+---
+
+## Variáveis de ambiente
+
+O arquivo [`.env.example`](.env.example) contém valores locais sem segredos reais.
+
+Principais variáveis:
+
+```env
+APP_ENV=local
+APP_PORT=8080
+LOG_LEVEL=info
+
+DATABASE_URL=postgres://jungle:jungle@localhost:5432/jungle?sslmode=disable
+
+AWS_REGION=us-east-1
+AWS_ENDPOINT_URL=http://localhost:4566
+AWS_ACCESS_KEY_ID=test
+AWS_SECRET_ACCESS_KEY=test
+
+SQS_TRANSACTIONS_QUEUE_URL=http://localhost:4566/000000000000/wager-transactions.fifo
+SQS_TRANSACTIONS_DLQ_URL=http://localhost:4566/000000000000/wager-transactions-dlq.fifo
+SQS_EVENTS_QUEUE_URL=http://localhost:4566/000000000000/wager-events.fifo
+
+KEYCLOAK_ISSUER=http://localhost:8081/realms/jungle-go
+KEYCLOAK_JWKS_URL=http://localhost:8081/realms/jungle-go/protocol/openid-connect/certs
+KEYCLOAK_AUDIENCE=wager-api
+```
+
+Quando a aplicação roda dentro do Compose, o Compose usa:
+
+```env
+KEYCLOAK_ISSUER=http://localhost:8081/realms/jungle-go
+KEYCLOAK_JWKS_URL=http://keycloak:8080/realms/jungle-go/protocol/openid-connect/certs
+```
+
+O issuer é o valor presente nos tokens emitidos para o host. O JWKS é obtido pela rede interna do Compose.
+
+---
+
+## Migrations
+
+Aplicar:
+
+```sh
+docker compose run --rm migrate up
+```
+
+Reverter uma migration:
+
+```sh
+docker compose run --rm migrate down 1
+```
+
+Consultar versão:
+
+```sh
+docker compose run --rm migrate version
+```
+
+Alternativa local:
+
+```sh
+DATABASE_URL=postgres://jungle:jungle@localhost:5432/jungle?sslmode=disable \
+  go run ./cmd/migrate up
+```
+
+Migrations disponíveis:
+
+- `000001_init`
+- `000002_constraints_triggers`
+
+Cada migration possui `up` e `down`. A reversão é testada na suíte de integração.
+
+---
+
+## Filas SQS
+
+O script [`deploy/localstack/init-queues.sh`](deploy/localstack/init-queues.sh) provisiona automaticamente:
+
+- `wager-transactions.fifo`
+- `wager-transactions-dlq.fifo`
+- `wager-events.fifo`
+
+Configuração principal:
+
+| Parâmetro | Valor |
+| --- | --- |
+| FIFO | `true` |
+| Visibility timeout da fila de entrada | 60s |
+| Redrive | DLQ com `maxReceiveCount=5` |
+| `MessageGroupId` de entrada | `walletId` |
+| `MessageDeduplicationId` de entrada | `idempotencyKey` |
+| `MessageGroupId` de eventos | `aggregateId` |
+| `MessageDeduplicationId` de eventos | `eventId` |
+
+Listar filas:
+
+```sh
+docker compose exec localstack awslocal sqs list-queues
+```
+
+A aplicação **não** depende da deduplicação do SQS para integridade. Unicidade e idempotência são garantidas no PostgreSQL.
+
+---
+
+## Keycloak
+
+O realm `jungle-go` é importado automaticamente a partir de
+[`deploy/keycloak/realm-export.json`](deploy/keycloak/realm-export.json).
+
+Clientes:
+
+| Cliente | Role | Claim | Uso |
+| --- | --- | --- | --- |
+| `internal-service` | `internal` | — | Operações internas de carteira |
+| `provider-a` | `provider` | `provider_id=provider-a` | Operações do provedor A |
+| `provider-b` | `provider` | `provider_id=provider-b` | Operações do provedor B |
+
+Segredos locais:
+
+```text
+internal-secret
+provider-a-secret
+provider-b-secret
+```
+
+Obter token interno:
+
+```sh
+INTERNAL_TOKEN=$(curl -s -X POST \
+  http://localhost:8081/realms/jungle-go/protocol/openid-connect/token \
+  -d grant_type=client_credentials \
+  -d client_id=internal-service \
+  -d client_secret=internal-secret \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+```
+
+Obter token de provedor:
+
+```sh
+PROVIDER_TOKEN=$(curl -s -X POST \
+  http://localhost:8081/realms/jungle-go/protocol/openid-connect/token \
+  -d grant_type=client_credentials \
+  -d client_id=provider-a \
+  -d client_secret=provider-a-secret \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+```
+
+### Regras de autorização
+
+- `/health/live` e `/health/ready`: públicos.
+- `/wallets`, ledger e reconciliação: somente role `internal`.
+- `POST /wagering/transactions`: somente role `provider`.
+- `providerId` do corpo deve ser igual ao `provider_id` do token.
+- `GET /wagering/transactions/:id`: serviço interno ou provider dono.
+- `GET /providers/:providerId/...`: serviço interno ou o próprio provider.
+- `/metrics`: somente role `internal`.
+
+Tokens ausentes, inválidos ou expirados retornam `401`.
+Acesso indevido retorna `403`.
+
+---
+
+## Exemplos de uso
+
+### 1. Abrir carteira
+
+```sh
+curl -s -X POST http://localhost:8080/wallets \
+  -H "Authorization: Bearer $INTERNAL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+    "initialBalance": {"amount": "1000.00", "currency": "BRL"}
+  }'
+```
+
+Resposta:
 
 ```json
 {
   "id": "0192f291-27dd-7d3f-8071-5f8685deef37",
   "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
-  "balance": { "amount": "1000.00", "currency": "BRL" },
+  "balance": {"amount": "1000.00", "currency": "BRL"},
   "version": 1
 }
 ```
 
-Uma abertura com saldo positivo deve criar `OPENING` em `PROCESSED`, seu lançamento de crédito e os registros de outbox para `WagerTransactionProcessed` e `WalletBalanceChanged` no mesmo commit da carteira. Esses eventos de origem interna não exigem os metadados externos inaplicáveis; a versão da carteira nessa abertura é `1`. Saldo inicial zero não cria `OPENING`, ledger nem esses eventos financeiros. Tentar abrir outra carteira para o mesmo jogador e moeda deve resultar em conflito.
+### 2. Enviar BET
 
-### Leitura
-
-```http
-GET /wallets/:walletId
-GET /wallets/:walletId/ledger?cursor=...&limit=50
-GET /wagering/transactions/:transactionId
-GET /providers/:providerId/wagering/transactions/:externalTransactionId
+```sh
+curl -s -X POST http://localhost:8080/wagering/transactions \
+  -H "Authorization: Bearer $PROVIDER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: provider-a:transaction-123' \
+  -d '{
+    "providerId": "provider-a",
+    "externalTransactionId": "transaction-123",
+    "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
+    "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
+    "roundId": "round-987",
+    "gameId": "fortune-chimp",
+    "kind": "BET",
+    "money": {"amount": "25.00", "currency": "BRL"}
+  }'
 ```
 
-A paginação do ledger deve usar cursor opaco e ordenação estável. As consultas de transação devem permitir acompanhar pendências e consultar códigos de rejeição ou falha.
-
-### Envio de operação
-
-```http
-POST /wagering/transactions
-Content-Type: application/json
-Idempotency-Key: provider-a:transaction-123
-```
-
-```json
-{
-  "providerId": "provider-a",
-  "externalTransactionId": "transaction-123",
-  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
-  "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
-  "roundId": "round-987",
-  "gameId": "fortune-chimp",
-  "kind": "BET",
-  "money": { "amount": "25.00", "currency": "BRL" }
-}
-```
-
-Exemplo após processamento:
+Resposta:
 
 ```json
 {
   "transactionId": "0192f298-345e-7e38-af88-e43f851a819d",
   "status": "PROCESSED",
-  "balance": { "amount": "975.00", "currency": "BRL" },
+  "balance": {"amount": "975.00", "currency": "BRL"},
   "idempotentReplay": false
 }
 ```
 
-Para reversões, acrescente `referenceExternalTransactionId` ao corpo.
+Replay com a mesma chave e o mesmo corpo retorna o mesmo saldo com
+`"idempotentReplay": true`.
 
-O header `Idempotency-Key` é obrigatório. O cliente pode construí-lo como `{providerId}:{externalTransactionId}`, mas o servidor não deve substituir silenciosamente uma chave recebida por outra calculada.
+### 3. Consultar
 
-Persista um hash determinístico dos campos de negócio, usando JSON canônico com ordenação de chaves. Exclua a chave de idempotência e os metadados de transporte desse cálculo. Documente algoritmo, campos e normalizações, garantindo equivalência entre HTTP e SQS.
+```sh
+curl -s http://localhost:8080/wallets/$WALLET_ID \
+  -H "Authorization: Bearer $INTERNAL_TOKEN"
 
-- Chave e conteúdo equivalentes: retorne o resultado persistido, com `idempotentReplay: true`.
-- Chave reutilizada com conteúdo diferente: devolva conflito.
-- Uma operação financeira identificada por `(providerId, externalTransactionId)` não pode ser reaplicada usando outra chave.
-- Para operações concluídas, o replay deve devolver o saldo observado no processamento original, mesmo que a carteira já tenha recebido outras movimentações.
+curl -s "http://localhost:8080/wallets/$WALLET_ID/ledger?limit=50" \
+  -H "Authorization: Bearer $INTERNAL_TOKEN"
 
-Documente os códigos HTTP e os corpos de resposta para entrada inválida, conflito, rejeição de negócio, processamento pendente e indisponibilidade transitória. Essas situações precisam ser distinguíveis pelo contrato.
+curl -s -X POST http://localhost:8080/wallets/$WALLET_ID/reconciliation \
+  -H "Authorization: Bearer $INTERNAL_TOKEN"
 
-### Reconciliação
-
-```http
-POST /wallets/:walletId/reconciliation
+curl -s http://localhost:8080/wagering/transactions/$TRANSACTION_ID \
+  -H "Authorization: Bearer $PROVIDER_TOKEN"
 ```
 
-Exemplo considerando apenas a abertura e a aposta apresentadas acima:
+### 4. Reversões
+
+`REFUND` e `ROLLBACK` exigem `referenceExternalTransactionId`:
 
 ```json
 {
+  "providerId": "provider-a",
+  "externalTransactionId": "refund-123",
+  "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
   "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
-  "storedBalance": { "amount": "975.00", "currency": "BRL" },
-  "calculatedBalance": { "amount": "975.00", "currency": "BRL" },
-  "difference": { "amount": "0.00", "currency": "BRL" },
-  "consistent": true,
-  "checkedEntries": 2
+  "roundId": "round-987",
+  "gameId": "fortune-chimp",
+  "kind": "REFUND",
+  "money": {"amount": "25.00", "currency": "BRL"},
+  "referenceExternalTransactionId": "transaction-123"
 }
 ```
 
-Reconstrua o saldo a partir do ledger, incluindo a abertura, e compare os valores em uma visão consistente dos dados. `difference` é o saldo armazenado menos o saldo reconstruído.
+Se a referência ainda não existir, a resposta é `202` com
+`"status": "PENDING_REFERENCE"`. O worker resolve automaticamente quando a
+transação referenciada chegar.
 
-Reporte divergências na resposta, nos logs e em uma métrica. A reconciliação não deve alterar o saldo.
+### 5. SQS
 
-### Health checks públicos
-
-```http
-GET /health/live
-GET /health/ready
-```
-
-Liveness do processo e readiness de PostgreSQL e SQS.
-
-## 10. Consumidor SQS
-
-Provisione as filas `wager-transactions.fifo` e `wager-transactions-dlq.fifo`, incluindo a configuração de redrive.
-
-Exemplo de corpo de mensagem:
+Exemplo de mensagem:
 
 ```json
 {
@@ -333,134 +358,198 @@ Exemplo de corpo de mensagem:
   "occurredAt": "2026-09-08T12:00:00.000Z",
   "data": {
     "providerId": "provider-a",
-    "externalTransactionId": "transaction-123",
-    "idempotencyKey": "provider-a:transaction-123",
+    "externalTransactionId": "transaction-sqs-123",
+    "idempotencyKey": "provider-a:transaction-sqs-123",
     "playerId": "0192f28f-5dc0-7d58-bdb2-814ad6a0f4a1",
     "walletId": "0192f291-27dd-7d3f-8071-5f8685deef37",
     "roundId": "round-987",
     "gameId": "fortune-chimp",
     "kind": "BET",
-    "money": { "amount": "25.00", "currency": "BRL" }
+    "money": {"amount": "25.00", "currency": "BRL"}
   }
 }
 ```
 
-HTTP e SQS devem compartilhar o caso de uso e as garantias de idempotência financeira. Na entrada por SQS, a chave é `data.idempotencyKey`, com deduplicação adicional pela inbox.
-
-- Use o `messageId` do envelope como identidade durável da mensagem para o consumidor e verifique seu hash em reentregas.
-- Remova a mensagem da fila somente após o commit do seu tratamento durável.
-- Rejeições de negócio confirmadas são terminais e permitem a remoção da mensagem.
-- Falhas transitórias exigem retry com backoff; erros permanentes ou tentativas esgotadas devem chegar à DLQ.
-- Documente limites de tentativas, visibility timeout e tratamento de mensagens inválidas.
-- Em `SIGTERM`, pare de buscar trabalho e conclua o processamento em andamento dentro do prazo, ou libere sua visibilidade para reentrega segura.
-
-Documente `MessageGroupId` e `MessageDeduplicationId` e valide a concorrência entre entradas HTTP e SQS.
-
-## 11. Publicação com transactional outbox
-
-Estado da operação, saldo, ledger, inbox e registros de eventos devem ser confirmados atomicamente, conforme aplicável.
-
-Um worker separado publica os registros pendentes da outbox. Ele deve suportar múltiplos publishers, disputa por registros, backoff e recuperação de trabalho abandonado.
-
-Demonstre recuperação após interrupção entre commit e publicação e entre publicação e confirmação na outbox. Eventos pendentes devem ser assumidos por outra instância; republicações devem preservar o `eventId`.
-
-Provisione o destino dos eventos de saída e documente seus contratos de roteamento e consumo.
-
-### Eventos exigidos
-
-| Evento | Gatilho |
-| --- | --- |
-| `WagerTransactionProcessed` | Conclusão bem-sucedida de uma operação, incluindo `LOSS` |
-| `WagerTransactionRejected` | Rejeição definitiva por regra de negócio |
-| `WalletBalanceChanged` | Alteração efetiva do saldo |
-| `WagerTransactionPendingReference` | Registro de espera pela referência |
-
-Defina tipos concretos por evento. O envelope deve conter `eventId`, `eventType`, `aggregateId`, `correlationId`, `causationId` opcional, `occurredAt`, `version` e `data` tipado.
-
-O payload de `WalletBalanceChanged` deve incluir `walletId`, `transactionId`, `direction`, `money`, `balanceBefore`, `balanceAfter` e `walletVersion`.
-
-Tipo e versão devem ser definidos pelo construtor do evento. Use timestamps UTC em RFC 3339 e valores monetários em strings decimais. O payload da outbox deve ser um snapshot imutável.
-
-## 12. Observabilidade
-
-Produza logs JSON com os identificadores disponíveis para rastrear a operação: `correlationId`, `messageId`, `transactionId`, `walletId` e `providerId`. Não registre credenciais, dados sensíveis ou payloads financeiros completos.
-
-Exponha métricas para resultados por status, duplicatas, retries, DLQ, conflitos de concorrência, atraso da outbox, latência de processamento e divergências de reconciliação.
-
-Inclua os health checks definidos na API. Tracing com OpenTelemetry e dashboards são diferenciais opcionais.
-
-## 13. Verificação obrigatória
-
-### Testes unitários
-
-Cubra parsing e operações de `Money`, escala, limites numéricos, entradas inválidas, incompatibilidade de moedas, invariantes da carteira, transições de estado, regras dos cinco tipos externos e conflito de payload para a mesma chave. Inclua a política de valores zero de cada tipo e a abertura interna com seus metadados e eventos.
-
-### Testes de integração
-
-Execute PostgreSQL, o IdP e LocalStack ou MiniStack em containers reais. Verifique migrations, constraints, imutabilidade do ledger, atomicidade financeira, inbox, reentrega, outbox concorrente, retry, DLQ e recuperação após reinicialização.
-
-Adicione uma verificação da composição Fx e de seu início e encerramento, incluindo liberação de recursos dos workers. Não substitua toda a infraestrutura por mocks.
-
-### Autenticação e autorização
-
-- Integração real com o IdP e rejeição de credenciais ausentes, inválidas ou expiradas.
-- Isolamento entre provedores, inclusive em consultas e replays, e restrição das operações internas.
-- Ausência de efeitos financeiros ou exposição de dados em acessos não autorizados.
-
-### Testes de concorrência e recuperação
-
-1. Envie a mesma aposta 50 vezes em paralelo e comprove um único débito.
-2. Execute a disputa das duas apostas de 80.00 sobre saldo de 100.00.
-3. Processe carteiras distintas simultaneamente.
-4. Repita cenários relevantes com pelo menos três instâncias independentes.
-5. Interrompa um consumidor depois do commit e antes da remoção da mensagem; valide a reentrega.
-6. Execute dois publishers disputando a mesma outbox e valide a recuperação de publicação.
-7. Entregue `REFUND` ou `ROLLBACK` antes da referência e comprove a resolução posterior ou a rejeição por expiração.
-8. Reinicie a aplicação e verifique que idempotência, pendências e consistência financeira foram preservadas. Se houver aceite assíncrono, interrompa o processo após confirmar `PENDING` e antes de executar a operação; outra instância deve retomá-la.
-
-Ao final, confira o saldo armazenado contra a soma de créditos menos débitos do ledger. Inclua cenários que cruzem HTTP e SQS para a mesma operação.
-
-Os testes de duplicidade devem exercitar a deduplicação da aplicação, com recebimentos repetidos comprovados.
-
-Execute `go test -race` nos testes aplicáveis.
-
-## 14. Critérios de avaliação
-
-| Critério | Pontos | Evidência esperada |
-| --- | ---: | --- |
-| Integridade financeira | 20 | Precisão, invariantes, reversões e reconciliação confiáveis |
-| Concorrência | 20 | Coordenação entre processos e ausência de atualizações perdidas |
-| Idempotência | 15 | Persistência, detecção de conflito e reprodução do resultado original |
-| Mensageria e recuperação | 15 | Inbox, outbox, retries, DLQ e encerramento seguro |
-| Modelagem e arquitetura | 10 | Encapsulamento em Go, composição com Fx e políticas de autenticação e autorização |
-| Testes | 10 | Integração real, isolamento entre provedores, paralelismo e interrupção |
-| Observabilidade | 5 | Diagnóstico por logs, métricas e health checks |
-| Documentação | 5 | Execução reproduzível e decisões técnicas explicadas |
-| **Total** | **100** | |
-
-São eliminatórios: ausência de autenticação efetiva nos endpoints de negócio, acesso não autorizado a operações ou transações, cálculo monetário em ponto flutuante, saldo negativo por concorrência, movimentação duplicada, idempotência restrita à memória, dependência de uma única instância para funcionar corretamente, publicação anterior ao commit, ausência de ledger auditável ou substituição integral de PostgreSQL, SQS e IdP por mocks nos testes.
-
-Partidas dobradas, tracing e testes de carga são diferenciais opcionais. Testes de carga devem incluir comando reproduzível, ambiente, metodologia, throughput, p50/p95/p99, erros, conflitos e atraso da outbox. Não há meta mínima de RPS.
-
-## 15. Entrega
-
-Entregue o código, migrations, ambiente Docker Compose e instruções suficientes para outra pessoa reproduzir a solução a partir de um checkout limpo.
-
-O `README.md` da solução deve explicar pré-requisitos, variáveis de ambiente, inicialização das filas, aplicação e reversão das migrations, execução da aplicação, exemplos de chamadas e comandos de teste. Inclua `.env.example` com valores locais de exemplo, sem segredos reais.
-
-Inclua o provisionamento automático do IdP, identidades de teste e instruções para executar os fluxos autenticados.
-
-No `ARCHITECTURE.md`, registre as decisões sobre dinheiro, transações, idempotência, locks, referências pendentes, reversões, inbox/outbox, autenticação, autorização, uso do Fx e shutdown. Explicite limitações, interpretações adotadas e trabalho não concluído.
-
-Disponibilize os comandos abaixo ou equivalentes documentados:
+Envio local:
 
 ```sh
-docker compose up --build
+docker compose exec -T localstack awslocal sqs send-message \
+  --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
+  --message-group-id "$WALLET_ID" \
+  --message-deduplication-id "provider-a:transaction-sqs-123" \
+  --message-body "$MESSAGE_BODY"
+```
+
+O `messageId` do envelope é a identidade durável da inbox. Mensagens com o mesmo
+`messageId` e o mesmo hash são deduplicadas. O mesmo `messageId` com hash
+diferente é enviado para a DLQ.
+
+### 6. Métricas
+
+```sh
+curl -s http://localhost:8080/metrics \
+  -H "Authorization: Bearer $INTERNAL_TOKEN"
+```
+
+Métricas principais:
+
+- `wager_transactions_total{status,kind}`
+- `wager_idempotent_replays_total`
+- `wager_idempotency_conflicts_total`
+- `wager_concurrency_conflicts_total`
+- `wager_sqs_messages_total{result}`
+- `wager_sqs_retries_total`
+- `wager_dlq_messages_total`
+- `wager_outbox_pending`
+- `wager_outbox_publish_latency_seconds`
+- `wager_outbox_publish_failures_total`
+- `wager_reference_pending`
+- `wager_reference_attempts_total`
+- `wager_reconciliation_divergences_total`
+- `wager_request_duration_seconds{method,route,status}`
+
+---
+
+## Testes
+
+### Unitários
+
+```sh
 go test ./...
 go test -race ./...
 go vet ./...
+gofmt -l .
 ```
 
-Documente separadamente como preparar as dependências dos testes e executar integração, múltiplas instâncias e simulações de falha. Se utilizar build tags, informe os comandos correspondentes.
+### Integração
 
-Entregue código formatado com `gofmt` e dependências reproduzíveis.
+Dependências reais:
+
+```sh
+docker compose up -d postgres localstack keycloak
+```
+
+Executar:
+
+```sh
+go test -tags=integration ./test/integration/...
+go test -race -tags=integration ./test/integration/...
+```
+
+Os testes de integração:
+
+- criam bancos temporários no PostgreSQL;
+- executam migrations up/down;
+- criam filas FIFO temporárias no LocalStack;
+- obtêm tokens reais no Keycloak;
+- validam inbox, reentrega, DLQ, outbox concorrente, retries, auth e expiração de token.
+
+Encerrar dependências:
+
+```sh
+docker compose down -v
+```
+
+---
+
+## Múltiplas instâncias
+
+O arquivo [`docker-compose.multi.yml`](docker-compose.multi.yml) sobe três instâncias independentes:
+
+```sh
+docker compose down
+docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build app-1 app-2 app-3
+```
+
+| Instância | Porta |
+| --- | --- |
+| `app-1` | `8090` |
+| `app-2` | `8091` |
+| `app-3` | `8092` |
+
+Todas compartilham o mesmo PostgreSQL, SQS e Keycloak, mas possuem pool de conexões e memória próprios.
+
+Para encerrar:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.multi.yml down
+```
+
+---
+
+## Simulações de falha
+
+### PostgreSQL indisponível
+
+```sh
+docker compose stop postgres
+curl -i http://localhost:8080/health/ready
+docker compose start postgres
+```
+
+O readiness retorna `503` enquanto o banco estiver indisponível.
+
+### SQS indisponível
+
+```sh
+docker compose stop localstack
+docker compose start localstack
+```
+
+Mensagens não confirmadas são reentregues. Eventos pendentes da outbox permanecem no banco até a publicação.
+
+### Referência antes da transação
+
+Envie um `REFUND` ou `ROLLBACK` com uma referência inexistente. A resposta será
+`202 PENDING_REFERENCE`. Envie depois a `BET` referenciada. O worker resolve a
+pendência automaticamente.
+
+### Reentrega de mensagem
+
+Reenvie o mesmo envelope com um novo `MessageDeduplicationId` do SQS. A inbox
+detecta o mesmo `messageId` e o mesmo hash e não reaplica a operação.
+
+### Parada abrupta da aplicação
+
+```sh
+docker compose kill app
+docker compose up -d app
+```
+
+Idempotência, pendências e outbox são preservadas no PostgreSQL.
+
+### Outbox após commit
+
+Pare o LocalStack após uma operação financeira. O evento permanece em
+`outbox_events` com `published_at = NULL`. Ao reiniciar o LocalStack, o publisher
+publica o evento com o mesmo `eventId`.
+
+---
+
+## Estrutura do projeto
+
+```text
+cmd/app                 aplicação Fx
+cmd/migrate             runner de migrations
+internal/app            casos de uso
+internal/domain         domínio puro
+internal/httpapi        HTTP, auth middleware e observabilidade
+internal/infra          PostgreSQL, SQS, auth, migrations
+migrations              SQL versionado
+deploy                  Keycloak e LocalStack
+test/integration        testes com containers reais
+docs                    enunciado e plano
+```
+
+O domínio não importa Fx, HTTP, SQS ou pgx.
+
+---
+
+## Limitações e decisões
+
+- Apenas `BRL` é aceito nas entradas externas; `Money` suporta ISO 4217.
+- `REFUND` e `ROLLBACK` são mutuamente exclusivos por transação original.
+- O SQS é tratado como canal interno confiável; provedores usam HTTP. As credenciais e políticas do broker são documentadas no `ARCHITECTURE.md`.
+- Não há OpenTelemetry, dashboards ou testes de carga (diferenciais opcionais).
+- Não há ledger de partidas dobradas (opcional).
+- A validação de expiração de token é feita pelo verificador OIDC e coberta por teste de integração real.

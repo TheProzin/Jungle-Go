@@ -15,6 +15,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
+	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
 var (
@@ -185,18 +186,29 @@ func (s *Service) processTransaction(
 	if errors.Is(err, ErrDuplicateMessage) || errors.Is(err, ErrInboxHashMismatch) {
 		return nil, err
 	}
+	if errors.Is(err, domainwagering.ErrIdempotencyKeyConflict) ||
+		errors.Is(err, domainwagering.ErrExternalTransactionConflict) {
+		observability.Default.RecordIdempotencyConflict()
+	}
 	if errors.Is(err, domainwagering.ErrDuplicateIdentity) {
+		observability.Default.RecordConcurrencyConflict()
 		if inbox != nil {
 			return s.replayWithInbox(ctx, cmd, *inbox, hash)
 		}
 		return s.replay(ctx, cmd, hash)
 	}
+	if errors.Is(err, domainwallet.ErrConcurrentUpdate) {
+		observability.Default.RecordConcurrencyConflict()
+	}
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
+		observability.Default.RecordIdempotentReplay()
+		observability.Default.RecordTransaction(string(existing.Status()), string(existing.Kind()))
 		return replayResult(existing), nil
 	}
+	observability.Default.RecordTransaction(string(created.Status()), string(created.Kind()))
 	return resultFor(created, false), nil
 }
 
@@ -241,6 +253,11 @@ func (s *Service) replayWithInbox(
 	if err != nil {
 		return nil, err
 	}
+	observability.Default.RecordIdempotentReplay()
+	observability.Default.RecordTransaction(
+		string(result.Transaction.Status()),
+		string(result.Transaction.Kind()),
+	)
 	return result, nil
 }
 
@@ -839,11 +856,31 @@ func (s *Service) ProcessNextPendingReference(ctx context.Context) (bool, error)
 	return processed, err
 }
 
+func (s *Service) RefreshReferenceMetrics(ctx context.Context) {
+	var count int
+	err := s.uow.DoRead(ctx, func(repos ports.Repositories) error {
+		var err error
+		count, err = repos.Transactions.CountPendingReferences(ctx)
+		return err
+	})
+	if err != nil {
+		return
+	}
+	observability.Default.SetReferencePending(count)
+}
+
 func (s *Service) processPendingReference(
 	ctx context.Context,
 	repos ports.Repositories,
 	pending *domainwagering.Transaction,
 ) error {
+	observability.Default.RecordReferenceAttempt()
+	defer func() {
+		if pending.IsTerminal() {
+			observability.Default.RecordTransaction(string(pending.Status()), string(pending.Kind()))
+		}
+	}()
+
 	now := s.now()
 	correlationID := pending.ID().String()
 
@@ -958,6 +995,11 @@ func (s *Service) replay(ctx context.Context, cmd ProcessCommand, hash string) (
 	if err != nil {
 		return nil, err
 	}
+	observability.Default.RecordIdempotentReplay()
+	observability.Default.RecordTransaction(
+		string(existing.Status()),
+		string(existing.Kind()),
+	)
 	return replayResult(existing), nil
 }
 

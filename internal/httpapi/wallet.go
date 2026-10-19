@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -80,7 +81,10 @@ func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	correlationID := r.Header.Get("X-Correlation-Id")
+	correlationID := CorrelationIDFromContext(r.Context())
+	if correlationID == "" {
+		correlationID = r.Header.Get("X-Correlation-Id")
+	}
 	if correlationID == "" {
 		correlationID = uuid.NewString()
 	}
@@ -95,6 +99,12 @@ func (h *WalletHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Default().Info(
+		"wallet created",
+		"walletId", created.ID().String(),
+		"playerId", created.PlayerID().String(),
+		"correlationId", correlationID,
+	)
 	writeJSON(w, http.StatusCreated, walletResponse{
 		ID:       created.ID().String(),
 		PlayerID: created.PlayerID().String(),

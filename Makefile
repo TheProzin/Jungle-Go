@@ -1,4 +1,4 @@
-.PHONY: run build fmt vet test test-race compose-up compose-down compose-logs migrate-up migrate-down migrate-version test-integration
+.PHONY: run build fmt vet test test-race compose-up compose-down compose-logs compose-multi-up migrate-up migrate-down migrate-version test-integration
 
 run:
 	go run ./cmd/app
@@ -26,6 +26,9 @@ compose-down:
 
 compose-logs:
 	docker compose logs -f app
+
+compose-multi-up:
+	docker compose -f docker-compose.yml -f docker-compose.multi.yml up -d --build app-1 app-2 app-3
 
 migrate-up:
 	docker compose run --rm migrate up

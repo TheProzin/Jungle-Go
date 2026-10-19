@@ -12,19 +12,23 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/TheProzin/Jungle-Go/internal/config"
+	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
 func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler, auth *Auth) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health/live", health.Live)
-	mux.HandleFunc("GET /health/ready", health.Ready)
-	mux.HandleFunc("POST /wallets", auth.Internal(wallets.Create))
-	mux.HandleFunc("GET /wallets/{walletId}", auth.Internal(wallets.Get))
-	mux.HandleFunc("GET /wallets/{walletId}/ledger", auth.Internal(wallets.Ledger))
-	mux.HandleFunc("POST /wallets/{walletId}/reconciliation", auth.Internal(wallets.Reconcile))
-	mux.HandleFunc("POST /wagering/transactions", auth.Provider(wagering.Process))
-	mux.HandleFunc("GET /wagering/transactions/{transactionId}", auth.Authenticated(wagering.Get))
-	mux.HandleFunc("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", auth.Authenticated(wagering.GetByProvider))
+	metricsHandler := observability.Default.Handler()
+
+	mux.HandleFunc("GET /health/live", observe("GET /health/live", health.Live))
+	mux.HandleFunc("GET /health/ready", observe("GET /health/ready", health.Ready))
+	mux.HandleFunc("POST /wallets", observe("POST /wallets", auth.Internal(wallets.Create)))
+	mux.HandleFunc("GET /wallets/{walletId}", observe("GET /wallets/{walletId}", auth.Internal(wallets.Get)))
+	mux.HandleFunc("GET /wallets/{walletId}/ledger", observe("GET /wallets/{walletId}/ledger", auth.Internal(wallets.Ledger)))
+	mux.HandleFunc("POST /wallets/{walletId}/reconciliation", observe("POST /wallets/{walletId}/reconciliation", auth.Internal(wallets.Reconcile)))
+	mux.HandleFunc("POST /wagering/transactions", observe("POST /wagering/transactions", auth.Provider(wagering.Process)))
+	mux.HandleFunc("GET /wagering/transactions/{transactionId}", observe("GET /wagering/transactions/{transactionId}", auth.Authenticated(wagering.Get)))
+	mux.HandleFunc("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", observe("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", auth.Authenticated(wagering.GetByProvider)))
+	mux.HandleFunc("GET /metrics", observe("GET /metrics", auth.Internal(metricsHandler.ServeHTTP)))
 	return mux
 }
 

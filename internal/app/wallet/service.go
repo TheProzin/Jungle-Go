@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 	"github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
+	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
 var ErrInvalidCursor = errors.New("invalid cursor")
@@ -80,6 +82,9 @@ func (s *Service) CreateWallet(ctx context.Context, cmd CreateWalletCommand) (*d
 	})
 	if err != nil {
 		return nil, err
+	}
+	if cmd.InitialBalance.IsPositive() {
+		observability.Default.RecordTransaction("PROCESSED", "OPENING")
 	}
 	return created, nil
 }
@@ -276,6 +281,16 @@ func (s *Service) Reconcile(ctx context.Context, walletID uuid.UUID) (*Reconcili
 	})
 	if err != nil {
 		return nil, err
+	}
+	if !result.Consistent {
+		observability.Default.RecordReconciliationDivergence()
+		slog.Default().Warn(
+			"reconciliation divergence",
+			"walletId", result.WalletID.String(),
+			"difference", result.Difference.Amount(),
+			"currency", result.Difference.Currency(),
+			"checkedEntries", result.CheckedEntries,
+		)
 	}
 	return result, nil
 }

@@ -34,6 +34,7 @@ type TransactionRepository interface {
 	FindByIdentity(ctx context.Context, providerID, idempotencyKey, externalTransactionID string) ([]*wagering.Transaction, error)
 	FindNextPendingReferenceForUpdate(ctx context.Context) (*wagering.Transaction, error)
 	ExistsSuccessfulReversal(ctx context.Context, referenceTransactionID uuid.UUID) (bool, error)
+	CountPendingReferences(ctx context.Context) (int, error)
 }
 
 type LedgerRepository interface {
@@ -60,6 +61,7 @@ type OutboxRepository interface {
 	ClaimBatch(ctx context.Context, limit int, lease time.Duration) ([]OutboxEvent, error)
 	MarkPublished(ctx context.Context, eventID uuid.UUID, publishedAt time.Time) error
 	MarkFailed(ctx context.Context, eventID uuid.UUID, nextAttemptAt time.Time, lastError string) error
+	CountPending(ctx context.Context) (int, error)
 }
 
 type InboxRepository interface {

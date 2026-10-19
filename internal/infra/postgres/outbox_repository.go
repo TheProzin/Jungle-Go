@@ -156,3 +156,13 @@ func (r *OutboxRepository) MarkFailed(
 	}
 	return nil
 }
+
+func (r *OutboxRepository) CountPending(ctx context.Context) (int, error) {
+	var count int
+	if err := r.query.QueryRow(ctx, `
+		SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL
+	`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count pending outbox events: %w", err)
+	}
+	return count, nil
+}

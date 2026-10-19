@@ -31,6 +31,7 @@ func newTestHTTPServer(
 
 	cfg := keycloakTestConfig()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	slog.SetDefault(logger)
 	health := httpapi.NewHealth(pool, nil, cfg, logger)
 	authMiddleware := httpapi.NewAuth(authinfra.NewAuthenticator(cfg))
 
