@@ -1,4 +1,4 @@
-.PHONY: run build fmt vet test test-race compose-up compose-down compose-logs compose-multi-up migrate-up migrate-down migrate-version test-integration
+.PHONY: run build fmt vet test test-race compose-up compose-down compose-logs compose-multi-up migrate-up migrate-down migrate-version test-integration frontend-install frontend-dev frontend-build
 
 run:
 	go run ./cmd/app
@@ -41,3 +41,12 @@ migrate-version:
 
 test-integration:
 	go test -tags=integration ./test/integration/...
+
+frontend-install:
+	cd frontend && npm install
+
+frontend-dev:
+	cd frontend && npm run dev
+
+frontend-build:
+	cd frontend && npm run build

@@ -3,3 +3,5 @@ bin/
 coverage.out
 *.test
 .DS_Store
+node_modules/
+frontend/dist/

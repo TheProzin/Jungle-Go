@@ -492,6 +492,41 @@ docker compose -f docker-compose.yml -f docker-compose.multi.yml down
 
 ---
 
+## Front-end de teste
+
+Há um console web simples em [`frontend/`](frontend/) para exercitar a API.
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Acesse `http://localhost:5173`.
+
+O dev server faz:
+
+- proxy de `/api/*` para `http://localhost:8080`;
+- troca de token `client_credentials` no servidor (`/token`), mantendo os
+  segredos locais fora do browser.
+
+O console cobre: autenticação, health, criação/consulta de carteira, ledger,
+reconciliação, BET/WIN/LOSS/REFUND/ROLLBACK, consultas de transação, métricas e
+simulação de mensagem SQS.
+
+Build de produção:
+
+```sh
+npm run build
+```
+
+O simulador SQS usa o endpoint de desenvolvimento `POST /dev/sqs/send`
+(autenticado como `internal`), que publica o envelope em
+`wager-transactions.fifo`. Esse endpoint existe apenas para testes locais e não
+deve ser exposto em produção.
+
+---
+
 ## Simulações de falha
 
 ### PostgreSQL indisponível

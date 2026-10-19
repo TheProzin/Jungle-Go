@@ -15,7 +15,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/observability"
 )
 
-func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler, auth *Auth) *http.ServeMux {
+func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler, auth *Auth, sqsDev *SQSDevHandler) *http.ServeMux {
 	mux := http.NewServeMux()
 	metricsHandler := observability.Default.Handler()
 
@@ -29,6 +29,7 @@ func NewMux(health *Health, wallets *WalletHandler, wagering *WageringHandler, a
 	mux.HandleFunc("GET /wagering/transactions/{transactionId}", observe("GET /wagering/transactions/{transactionId}", auth.Authenticated(wagering.Get)))
 	mux.HandleFunc("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", observe("GET /providers/{providerId}/wagering/transactions/{externalTransactionId}", auth.Authenticated(wagering.GetByProvider)))
 	mux.HandleFunc("GET /metrics", observe("GET /metrics", auth.Internal(metricsHandler.ServeHTTP)))
+	mux.HandleFunc("POST /dev/sqs/send", observe("POST /dev/sqs/send", auth.Internal(sqsDev.Send)))
 	return mux
 }
 

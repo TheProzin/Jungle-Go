@@ -19,6 +19,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/httpapi"
 	authinfra "github.com/TheProzin/Jungle-Go/internal/infra/auth"
+	sqsinfra "github.com/TheProzin/Jungle-Go/internal/infra/sqs"
 )
 
 func newTestHTTPServer(
@@ -35,11 +36,17 @@ func newTestHTTPServer(
 	health := httpapi.NewHealth(pool, nil, cfg, logger)
 	authMiddleware := httpapi.NewAuth(authinfra.NewAuthenticator(cfg))
 
+	sqsClient, err := sqsinfra.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("create sqs client: %v", err)
+	}
+
 	return httptest.NewServer(httpapi.NewMux(
 		health,
 		httpapi.NewWalletHandler(walletService),
 		httpapi.NewWageringHandler(wageringService),
 		authMiddleware,
+		httpapi.NewSQSDevHandler(sqsClient, cfg),
 	))
 }
 
@@ -50,6 +57,10 @@ func keycloakTestConfig() *config.Config {
 		KeycloakAudience:        "wager-api",
 		ReadinessTimeout:        2 * time.Second,
 		SQSTransactionsQueueURL: "http://localhost:4566/000000000000/wager-transactions.fifo",
+		AWSRegion:               "us-east-1",
+		AWSEndpoint:             "http://localhost:4566",
+		AWSAccessKeyID:          "test",
+		AWSSecretAccessKey:      "test",
 	}
 }
 
