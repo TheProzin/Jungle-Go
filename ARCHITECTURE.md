@@ -420,7 +420,54 @@ SQS:
 - credenciais e políticas do broker são restritas a produtores/consumidores
   internos;
 - validações de domínio continuam no consumidor;
-- provedores usam HTTP como canal de entrada.
+- provedores usam HTTP como canal de entrada;
+- `ALLOWED_PROVIDERS` define o registry aceito pelo consumidor; provider
+  desconhecido é falha permanente e vai para a DLQ.
+
+### 14.1 Contratos HTTP e códigos
+
+Corpo de erro:
+
+```json
+{
+  "error": {
+    "code": "INSUFFICIENT_FUNDS",
+    "message": "insufficient funds",
+    "retryable": false
+  }
+}
+```
+
+| Status | Casos |
+| --- | --- |
+| `200` | operação processada ou replay |
+| `201` | carteira criada |
+| `202` | `PENDING` / `PENDING_REFERENCE` |
+| `400` | `INVALID_REQUEST`, `INVALID_MONEY`, `IDEMPOTENCY_KEY_REQUIRED`, `IDEMPOTENCY_KEY_INVALID`, `OPENING_NOT_ALLOWED`, `LOSS_AMOUNT_NOT_ZERO`, `REFERENCE_REQUIRED` |
+| `401` | `UNAUTHORIZED` |
+| `403` | `FORBIDDEN_PROVIDER` |
+| `404` | `WALLET_NOT_FOUND`, `TRANSACTION_NOT_FOUND` |
+| `409` | `WALLET_ALREADY_EXISTS`, `IDEMPOTENCY_KEY_CONFLICT`, `EXTERNAL_TRANSACTION_CONFLICT` |
+| `422` | `INSUFFICIENT_FUNDS`, `INSUFFICIENT_FUNDS_FOR_REVERSAL`, `REFERENCE_MISMATCH`, `REFERENCE_AMOUNT_MISMATCH`, `WALLET_PLAYER_MISMATCH`, `REFERENCE_NOT_FOUND`, `REFERENCE_NOT_PROCESSED`, `DUPLICATE_REVERSAL`, `TRANSACTION_FAILED` |
+| `503` | `INFRA_UNAVAILABLE` |
+| `500` | `INTERNAL_ERROR` |
+
+Resposta de processamento:
+
+```json
+{
+  "transactionId": "...",
+  "status": "PROCESSED",
+  "balance": {"amount": "975.00", "currency": "BRL"},
+  "idempotentReplay": false
+}
+```
+
+Em rejeição, `balance` é omitido e `failureCode` é incluído. Em pendência, o status é
+`PENDING_REFERENCE` e a resposta é `202`.
+
+O ledger segue paginação por cursor opaco (`nextCursor`) e a reconciliação devolve
+`storedBalance`, `calculatedBalance`, `difference`, `consistent` e `checkedEntries`.
 
 ---
 
@@ -462,6 +509,14 @@ componentes que o utilizam.
 | Infraestrutura permanente | payload irrecuperável, corrupção | `FAILED` / DLQ |
 
 Falhas transitórias não são persistidas como rejeição.
+
+Failpoints de teste em `internal/platform/failpoint` permitem simular:
+
+- crash após commit e antes do delete da mensagem SQS;
+- crash após publicação e antes de `published_at` na outbox;
+- crash após commit de `PENDING_REFERENCE` e antes da continuidade.
+
+Em produção os hooks são no-op; são habilitados apenas nos testes de integração.
 
 ---
 

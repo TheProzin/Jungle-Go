@@ -103,6 +103,75 @@ func TestInboxCompletesOnPendingReference(t *testing.T) {
 	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE status = 'PENDING_REFERENCE'`, 1)
 }
 
+func TestCrossChannelIdempotency(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	walletService := walletapp.NewService(postgres.NewUnitOfWork(pool))
+	wageringService := wageringapp.NewService(postgres.NewUnitOfWork(pool))
+
+	t.Run("HTTP then SQS", func(t *testing.T) {
+		playerID := uuid.New()
+		wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
+		command := processCommand("provider-a", "cross-http-sqs", "idem-cross-http-sqs", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", "")
+
+		first, err := wageringService.ProcessTransaction(ctx, command)
+		if err != nil {
+			t.Fatalf("HTTP ProcessTransaction() error = %v", err)
+		}
+		assertProcessed(t, first, "90.00")
+
+		second, err := wageringService.ProcessTransactionWithInbox(
+			ctx,
+			command,
+			wageringapp.InboxIdentity{ConsumerName: "test-consumer", MessageID: "cross-message-1"},
+		)
+		if err != nil {
+			t.Fatalf("SQS ProcessTransactionWithInbox() error = %v", err)
+		}
+		if !second.IdempotentReplay || second.Transaction.ID() != first.Transaction.ID() {
+			t.Fatalf("second result = %+v, want replay of %s", second, first.Transaction.ID())
+		}
+		if second.Balance == nil || second.Balance.Amount() != "90.00" {
+			t.Fatalf("second balance = %v, want 90.00", second.Balance)
+		}
+
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE external_transaction_id = 'cross-http-sqs'`, 1)
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wallet_ledger_entries WHERE transaction_id = '`+first.Transaction.ID().String()+`'`, 1)
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM inbox_messages WHERE message_id = 'cross-message-1' AND status = 'COMPLETED'`, 1)
+	})
+
+	t.Run("SQS then HTTP", func(t *testing.T) {
+		playerID := uuid.New()
+		wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
+		command := processCommand("provider-a", "cross-sqs-http", "idem-cross-sqs-http", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", "")
+
+		first, err := wageringService.ProcessTransactionWithInbox(
+			ctx,
+			command,
+			wageringapp.InboxIdentity{ConsumerName: "test-consumer", MessageID: "cross-message-2"},
+		)
+		if err != nil {
+			t.Fatalf("SQS ProcessTransactionWithInbox() error = %v", err)
+		}
+		assertProcessed(t, first, "90.00")
+
+		second, err := wageringService.ProcessTransaction(ctx, command)
+		if err != nil {
+			t.Fatalf("HTTP ProcessTransaction() error = %v", err)
+		}
+		if !second.IdempotentReplay || second.Transaction.ID() != first.Transaction.ID() {
+			t.Fatalf("second result = %+v, want replay of %s", second, first.Transaction.ID())
+		}
+		if second.Balance == nil || second.Balance.Amount() != "90.00" {
+			t.Fatalf("second balance = %v, want 90.00", second.Balance)
+		}
+
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE external_transaction_id = 'cross-sqs-http'`, 1)
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wallet_ledger_entries WHERE transaction_id = '`+first.Transaction.ID().String()+`'`, 1)
+		assertCount(t, ctx, pool, `SELECT COUNT(*) FROM inbox_messages WHERE message_id = 'cross-message-2' AND status = 'COMPLETED'`, 1)
+	})
+}
+
 func TestInboxRollsBackWhenDomainFails(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()

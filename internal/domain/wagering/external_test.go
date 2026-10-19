@@ -199,6 +199,32 @@ func TestPendingReferenceCanBeRejected(t *testing.T) {
 	}
 }
 
+func TestMarkFailed(t *testing.T) {
+	transaction, _ := NewExternal(validExternalInput(t))
+
+	if err := transaction.MarkFailed("PERMANENT_INFRA_FAILURE", testNow); err != nil {
+		t.Fatalf("MarkFailed() error = %v", err)
+	}
+	if transaction.Status() != StatusFailed {
+		t.Fatalf("Status() = %q, want FAILED", transaction.Status())
+	}
+	if transaction.FailureCode() == nil || *transaction.FailureCode() != "PERMANENT_INFRA_FAILURE" {
+		t.Fatal("failure code was not stored")
+	}
+	if transaction.ResultBalance() != nil {
+		t.Fatal("failed transaction must not have result balance")
+	}
+	if transaction.ProcessedAt() == nil {
+		t.Fatal("processedAt was not set")
+	}
+	if err := transaction.MarkProcessed(money.Money{}, testNow); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("MarkProcessed after failure error = %v, want ErrInvalidTransition", err)
+	}
+	if !transaction.IsTerminal() {
+		t.Fatal("failed transaction must be terminal")
+	}
+}
+
 func TestRehydrateProcessedAndRejected(t *testing.T) {
 	amount, _ := money.Parse("25.00", "BRL")
 	result, _ := money.Parse("75.00", "BRL")

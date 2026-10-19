@@ -8,6 +8,7 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/app/ports"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/observability"
+	"github.com/TheProzin/Jungle-Go/internal/platform/failpoint"
 )
 
 type Sender interface {
@@ -96,6 +97,15 @@ func (p *Publisher) PublishBatch(ctx context.Context) (int, error) {
 			continue
 		}
 		observability.Default.RecordOutboxPublishLatency(time.Since(event.OccurredAt))
+		if err := failpoint.Trigger("outbox-after-publish"); err != nil {
+			observability.Default.RecordOutboxFailure()
+			p.logger.Error(
+				"failpoint outbox-after-publish",
+				"eventId", event.ID.String(),
+				"error", err,
+			)
+			continue
+		}
 		p.markPublished(event)
 		published++
 	}

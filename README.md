@@ -110,6 +110,7 @@ AWS_SECRET_ACCESS_KEY=test
 SQS_TRANSACTIONS_QUEUE_URL=http://localhost:4566/000000000000/wager-transactions.fifo
 SQS_TRANSACTIONS_DLQ_URL=http://localhost:4566/000000000000/wager-transactions-dlq.fifo
 SQS_EVENTS_QUEUE_URL=http://localhost:4566/000000000000/wager-events.fifo
+ALLOWED_PROVIDERS=provider-a,provider-b
 
 KEYCLOAK_ISSUER=http://localhost:8081/realms/jungle-go
 KEYCLOAK_JWKS_URL=http://localhost:8081/realms/jungle-go/protocol/openid-connect/certs
@@ -523,6 +524,14 @@ Idempotência, pendências e outbox são preservadas no PostgreSQL.
 Pare o LocalStack após uma operação financeira. O evento permanece em
 `outbox_events` com `published_at = NULL`. Ao reiniciar o LocalStack, o publisher
 publica o evento com o mesmo `eventId`.
+
+### Failpoints automatizados
+
+Os cenários de crash entre commit e delete/publicação têm testes dedicados:
+
+```sh
+go test -tags=integration ./test/integration/... -run 'TestSQSCrashAfterCommit|TestOutboxCrashAfterPublish|TestPendingReferenceCrashAfterCommit' -v
+```
 
 ---
 

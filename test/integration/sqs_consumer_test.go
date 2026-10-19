@@ -94,6 +94,38 @@ func TestSQSConsumerProcessesAndDeduplicates(t *testing.T) {
 	assertProcessedWallet(t, ctx, pool, wallet.ID().String(), 9000)
 }
 
+func TestSQSConsumerRejectsUnknownProvider(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	unitOfWork := postgres.NewUnitOfWork(pool)
+	walletService := walletapp.NewService(unitOfWork)
+	wageringService := wageringapp.NewService(unitOfWork)
+	playerID := uuid.New()
+	wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
+
+	cfg := localStackConfig()
+	cfg.AllowedProviders = []string{"provider-a"}
+	client, err := sqsinfra.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	queueURL, dlqURL := newTestQueue(t, client)
+	cfg.SQSTransactionsQueueURL = queueURL
+	cfg.SQSTransactionsDLQURL = dlqURL
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	consumer := sqsinfra.NewConsumer(client, cfg, wageringService, logger)
+
+	externalID := "forbidden-provider-" + uuid.NewString()
+	body := envelopeJSON(t, "forbidden-message-"+uuid.NewString(), "provider-x", externalID, "forbidden-key-"+uuid.NewString(), playerID.String(), wallet.ID().String(), "round-1", "game-1", "BET", "10.00", "")
+	sendSQSMessage(t, client, queueURL, wallet.ID().String(), "forbidden-dedup-"+uuid.NewString(), body)
+	processUntil(t, consumer, 10*time.Second)
+
+	assertDLQContains(t, client, dlqURL, externalID)
+	assertProcessedWallet(t, ctx, pool, wallet.ID().String(), 10000)
+	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE external_transaction_id = '`+externalID+`'`, 0)
+}
+
 func localStackConfig() *config.Config {
 	return &config.Config{
 		AWSRegion:                 "us-east-1",
@@ -104,6 +136,7 @@ func localStackConfig() *config.Config {
 		SQSConsumerWaitTime:       time.Second,
 		SQSConsumerInitialBackoff: 100 * time.Millisecond,
 		SQSConsumerMaxBackoff:     time.Second,
+		AllowedProviders:          []string{"provider-a", "provider-b"},
 	}
 }
 

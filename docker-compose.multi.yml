@@ -14,6 +14,7 @@ x-app-environment: &app-environment
   SQS_CONSUMER_WAIT_TIME: ${SQS_CONSUMER_WAIT_TIME:-20s}
   SQS_CONSUMER_INITIAL_BACKOFF: ${SQS_CONSUMER_INITIAL_BACKOFF:-1s}
   SQS_CONSUMER_MAX_BACKOFF: ${SQS_CONSUMER_MAX_BACKOFF:-5m}
+  ALLOWED_PROVIDERS: ${ALLOWED_PROVIDERS:-provider-a,provider-b}
   KEYCLOAK_ISSUER: http://localhost:8081/realms/jungle-go
   KEYCLOAK_JWKS_URL: http://keycloak:8080/realms/jungle-go/protocol/openid-connect/certs
   KEYCLOAK_AUDIENCE: wager-api

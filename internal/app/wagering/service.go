@@ -16,6 +16,7 @@ import (
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/observability"
+	"github.com/TheProzin/Jungle-Go/internal/platform/failpoint"
 )
 
 var (
@@ -203,6 +204,11 @@ func (s *Service) processTransaction(
 	if err != nil {
 		return nil, err
 	}
+	if created != nil && created.Status() == domainwagering.StatusPendingReference {
+		if hookErr := failpoint.Trigger("pending-after-commit"); hookErr != nil {
+			return nil, hookErr
+		}
+	}
 	if existing != nil {
 		observability.Default.RecordIdempotentReplay()
 		observability.Default.RecordTransaction(string(existing.Status()), string(existing.Kind()))
@@ -350,19 +356,19 @@ func (s *Service) apply(
 	}
 
 	if referenceFailure != "" {
-		if err := s.reject(ctx, repos, transaction, referenceFailure, cmd.CorrelationID, now); err != nil {
+		if _, err := s.rejectTransaction(ctx, repos, transaction, referenceFailure, cmd.CorrelationID, now, repos.Transactions.Create); err != nil {
 			return nil, err
 		}
 		return transaction, nil
 	}
 	if wallet.PlayerID() != cmd.PlayerID {
-		if err := s.reject(ctx, repos, transaction, "WALLET_PLAYER_MISMATCH", cmd.CorrelationID, now); err != nil {
+		if _, err := s.rejectTransaction(ctx, repos, transaction, "WALLET_PLAYER_MISMATCH", cmd.CorrelationID, now, repos.Transactions.Create); err != nil {
 			return nil, err
 		}
 		return transaction, nil
 	}
 	if wallet.Balance().Currency() != cmd.Amount.Currency() {
-		if err := s.reject(ctx, repos, transaction, "WALLET_CURRENCY_MISMATCH", cmd.CorrelationID, now); err != nil {
+		if _, err := s.rejectTransaction(ctx, repos, transaction, "WALLET_CURRENCY_MISMATCH", cmd.CorrelationID, now, repos.Transactions.Create); err != nil {
 			return nil, err
 		}
 		return transaction, nil
@@ -388,7 +394,7 @@ func (s *Service) apply(
 	case domainwagering.KindBet:
 		if err := wallet.Debit(cmd.Amount, now); err != nil {
 			if errors.Is(err, domainwallet.ErrInsufficientFunds) {
-				if err := s.reject(ctx, repos, transaction, "INSUFFICIENT_FUNDS", cmd.CorrelationID, now); err != nil {
+				if _, err := s.rejectTransaction(ctx, repos, transaction, "INSUFFICIENT_FUNDS", cmd.CorrelationID, now, repos.Transactions.Create); err != nil {
 					return nil, err
 				}
 				return transaction, nil
@@ -464,25 +470,6 @@ func (s *Service) rejectTransaction(
 		return nil, err
 	}
 	return transaction, nil
-}
-
-func (s *Service) reject(
-	ctx context.Context,
-	repos ports.Repositories,
-	transaction *domainwagering.Transaction,
-	failureCode, correlationID string,
-	now time.Time,
-) error {
-	_, err := s.rejectTransaction(
-		ctx,
-		repos,
-		transaction,
-		failureCode,
-		correlationID,
-		now,
-		repos.Transactions.Create,
-	)
-	return err
 }
 
 func (s *Service) insertRejectedEvent(

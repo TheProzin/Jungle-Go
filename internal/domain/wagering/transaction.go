@@ -46,7 +46,6 @@ var (
 	ErrExternalTransactionConflict = errors.New("external transaction conflict")
 	ErrDuplicateIdentity           = errors.New("duplicate transaction identity")
 	ErrDuplicateReversal           = errors.New("duplicate reversal")
-	ErrUnsupportedKind             = errors.New("unsupported transaction kind")
 )
 
 type Transaction struct {

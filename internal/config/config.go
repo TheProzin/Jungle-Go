@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type Config struct {
 	SQSConsumerWaitTime       time.Duration
 	SQSConsumerInitialBackoff time.Duration
 	SQSConsumerMaxBackoff     time.Duration
+	AllowedProviders          []string
 
 	KeycloakIssuer   string
 	KeycloakJWKSURL  string
@@ -65,6 +67,7 @@ func Load() (*Config, error) {
 		SQSConsumerWaitTime:       envDuration("SQS_CONSUMER_WAIT_TIME", 20*time.Second),
 		SQSConsumerInitialBackoff: envDuration("SQS_CONSUMER_INITIAL_BACKOFF", time.Second),
 		SQSConsumerMaxBackoff:     envDuration("SQS_CONSUMER_MAX_BACKOFF", 5*time.Minute),
+		AllowedProviders:          envList("ALLOWED_PROVIDERS", "provider-a,provider-b"),
 		KeycloakIssuer:            os.Getenv("KEYCLOAK_ISSUER"),
 		KeycloakJWKSURL:           os.Getenv("KEYCLOAK_JWKS_URL"),
 		KeycloakAudience:          os.Getenv("KEYCLOAK_AUDIENCE"),
@@ -109,6 +112,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.KeycloakAudience == "" {
 		errs = append(errs, fmt.Errorf("KEYCLOAK_AUDIENCE is required"))
+	}
+	if len(cfg.AllowedProviders) == 0 {
+		errs = append(errs, fmt.Errorf("ALLOWED_PROVIDERS must contain at least one provider"))
 	}
 	if cfg.SQSConsumerMaxMessages < 1 || cfg.SQSConsumerMaxMessages > 10 {
 		errs = append(errs, fmt.Errorf("SQS_CONSUMER_MAX_MESSAGES must be between 1 and 10"))
@@ -182,6 +188,23 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envList(key, fallback string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		value = fallback
+	}
+
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

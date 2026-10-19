@@ -5,6 +5,8 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	outboxapp "github.com/TheProzin/Jungle-Go/internal/app/outbox"
 	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
@@ -330,6 +333,107 @@ func TestRollbackInsufficientFundsUsesDistinctFailureCode(t *testing.T) {
 	if balanceMinor != 5000 {
 		t.Fatalf("balance = %d, want 5000", balanceMinor)
 	}
+}
+
+func TestRestartPreservesState(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	referenceConfig := &config.Config{
+		ReferenceInitialBackoff: time.Millisecond,
+		ReferenceMaxBackoff:     time.Millisecond,
+		ReferenceMaxAttempts:    5,
+		ReferenceTTL:            time.Hour,
+	}
+
+	walletService := walletapp.NewService(postgres.NewUnitOfWork(pool))
+	wageringService := wageringapp.NewServiceWithConfig(postgres.NewUnitOfWork(pool), referenceConfig)
+	playerID := uuid.New()
+	wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
+
+	betCommand := processCommand("provider-a", "bet-restart", "idem-bet-restart", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", "")
+	bet, err := wageringService.ProcessTransaction(ctx, betCommand)
+	if err != nil {
+		t.Fatalf("BET error = %v", err)
+	}
+	assertProcessed(t, bet, "90.00")
+
+	pendingCommand := processCommand("provider-a", "refund-restart", "idem-refund-restart", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindRefund, "10.00", "bet-late")
+	pending, err := wageringService.ProcessTransaction(ctx, pendingCommand)
+	if err != nil {
+		t.Fatalf("pending REFUND error = %v", err)
+	}
+	if pending.Transaction.Status() != domainwagering.StatusPendingReference {
+		t.Fatalf("status = %q, want PENDING_REFERENCE", pending.Transaction.Status())
+	}
+
+	lateBet, err := wageringService.ProcessTransaction(ctx, processCommand("provider-a", "bet-late", "idem-bet-late", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", ""))
+	if err != nil {
+		t.Fatalf("late BET error = %v", err)
+	}
+	assertProcessed(t, lateBet, "80.00")
+
+	if _, err := pool.Exec(ctx, `UPDATE wager_transactions SET next_reference_at = now() - interval '1 second' WHERE status = 'PENDING_REFERENCE'`); err != nil {
+		t.Fatalf("force pending reference due: %v", err)
+	}
+
+	restarted := wageringapp.NewServiceWithConfig(postgres.NewUnitOfWork(pool), referenceConfig)
+
+	replay, err := restarted.ProcessTransaction(ctx, betCommand)
+	if err != nil {
+		t.Fatalf("replay after restart error = %v", err)
+	}
+	if !replay.IdempotentReplay || replay.Transaction.ID() != bet.Transaction.ID() {
+		t.Fatalf("replay after restart = %+v, want same transaction", replay)
+	}
+	if replay.Balance == nil || replay.Balance.Amount() != "90.00" {
+		t.Fatalf("replay balance = %v, want 90.00", replay.Balance)
+	}
+
+	processed, err := restarted.ProcessNextPendingReference(ctx)
+	if err != nil {
+		t.Fatalf("ProcessNextPendingReference() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("expected pending reference to be resumed")
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM wager_transactions WHERE id = $1`, pending.Transaction.ID().String()).Scan(&status); err != nil {
+		t.Fatalf("query pending transaction: %v", err)
+	}
+	if status != "PROCESSED" {
+		t.Fatalf("pending status = %q, want PROCESSED", status)
+	}
+
+	var balanceMinor, version int64
+	if err := pool.QueryRow(ctx, `SELECT balance_minor, version FROM wallets WHERE id = $1`, wallet.ID().String()).Scan(&balanceMinor, &version); err != nil {
+		t.Fatalf("query wallet: %v", err)
+	}
+	if balanceMinor != 9000 || version != 4 {
+		t.Fatalf("wallet = %d v%d, want 9000 v4", balanceMinor, version)
+	}
+
+	sender := &fakeSender{}
+	publisher := outboxapp.NewPublisher(
+		postgres.NewUnitOfWork(pool),
+		sender,
+		&config.Config{
+			OutboxBatchSize:         20,
+			OutboxLease:             30 * time.Second,
+			OutboxInitialBackoff:    100 * time.Millisecond,
+			OutboxMaxBackoff:        time.Second,
+			OutboxPublisherInterval: time.Second,
+		},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	published, err := publisher.PublishBatch(ctx)
+	if err != nil {
+		t.Fatalf("PublishBatch() error = %v", err)
+	}
+	if published == 0 {
+		t.Fatal("expected outbox events to be published after restart")
+	}
+	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM outbox_events WHERE published_at IS NULL`, 0)
 }
 
 func TestReversalHTTPContract(t *testing.T) {

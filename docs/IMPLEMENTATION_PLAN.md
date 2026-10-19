@@ -1484,60 +1484,60 @@ Deve registrar, no mínimo:
 ## 19. Definition of Done
 
 ### Integridade financeira
-- [ ] `Money` sem float e com overflow tratado.
-- [ ] Saldo nunca negativo.
-- [ ] Ledger append-only com constraints e triggers.
-- [ ] Reconciliação confiável.
-- [ ] Reversões sem duplicidade, com valor idêntico ao referenciado.
-- [ ] `ROLLBACK` com direção correta por tipo original.
-- [ ] `WIN` com referência opcional validada por rodada.
-- [ ] `OPENING` com identidade interna estável.
+- [x] `Money` sem float e com overflow tratado.
+- [x] Saldo nunca negativo.
+- [x] Ledger append-only com constraints e triggers.
+- [x] Reconciliação confiável.
+- [x] Reversões sem duplicidade, com valor idêntico ao referenciado.
+- [x] `ROLLBACK` com direção correta por tipo original.
+- [x] `WIN` com referência opcional validada por rodada.
+- [x] `OPENING` com identidade interna estável.
 
 ### Concorrência
-- [ ] Lock por carteira.
-- [ ] Sem lost updates.
-- [ ] 3 instâncias validadas.
-- [ ] Cenário 80/80 sobre 100 reproduzido.
+- [x] Lock por carteira.
+- [x] Sem lost updates.
+- [x] 3 instâncias validadas.
+- [x] Cenário 80/80 sobre 100 reproduzido.
 
 ### Idempotência
-- [ ] Persistente.
-- [ ] Replay retorna resultado original.
-- [ ] Replay de `PENDING_REFERENCE` retorna 202 sem reaplicar.
-- [ ] Conflito de chave/conteúdo.
-- [ ] HTTP e SQS equivalentes.
-- [ ] Campos e normalizações do hash canônico documentados.
+- [x] Persistente.
+- [x] Replay retorna resultado original.
+- [x] Replay de `PENDING_REFERENCE` retorna 202 sem reaplicar.
+- [x] Conflito de chave/conteúdo.
+- [x] HTTP e SQS equivalentes.
+- [x] Campos e normalizações do hash canônico documentados.
 
 ### Mensageria e recuperação
-- [ ] Inbox na mesma transação.
-- [ ] Delete após commit.
-- [ ] DLQ e redrive.
-- [ ] Outbox com lease e retry.
-- [ ] Distinção entre transitório, `REJECTED` e `FAILED`.
-- [ ] Failpoints de C05/C06/C08 reproduzíveis.
-- [ ] Shutdown seguro.
+- [x] Inbox na mesma transação.
+- [x] Delete após commit.
+- [x] DLQ e redrive.
+- [x] Outbox com lease e retry.
+- [x] Distinção entre transitório, `REJECTED` e `FAILED`.
+- [x] Failpoints de C05/C06/C08 reproduzíveis.
+- [x] Shutdown seguro.
 
 ### Arquitetura
-- [ ] Fx com módulos e lifecycle.
-- [ ] Domínio independente de infraestrutura.
-- [ ] Auth e autorização reais.
-- [ ] Isolamento entre providers.
+- [x] Fx com módulos e lifecycle.
+- [x] Domínio independente de infraestrutura.
+- [x] Auth e autorização reais.
+- [x] Isolamento entre providers.
 
 ### Testes
-- [ ] Unitários completos, incluindo zero por tipo e `OPENING` interno.
-- [ ] Integração com containers reais.
-- [ ] Atomicidade financeira e retry/backoff cobertos.
-- [ ] `-race` executado.
-- [ ] Cenários de falha e restart.
+- [x] Unitários completos, incluindo zero por tipo e `OPENING` interno.
+- [x] Integração com containers reais.
+- [x] Atomicidade financeira e retry/backoff cobertos.
+- [x] `-race` executado.
+- [x] Cenários de falha e restart.
 
 ### Observabilidade
-- [ ] Logs JSON correlacionados.
-- [ ] Métricas obrigatórias.
-- [ ] Health checks.
-- [ ] Alerta de divergência de reconciliação.
+- [x] Logs JSON correlacionados.
+- [x] Métricas obrigatórias.
+- [x] Health checks.
+- [x] Alerta de divergência de reconciliação.
 
 ### Documentação
-- [ ] `README.md` da solução.
-- [ ] `ARCHITECTURE.md` com todos os tópicos da seção 18.2.
-- [ ] `.env.example`.
-- [ ] `docs/CHALLENGE.md`.
-- [ ] Comandos reproduzíveis.
+- [x] `README.md` da solução.
+- [x] `ARCHITECTURE.md` com todos os tópicos da seção 18.2.
+- [x] `.env.example`.
+- [x] `docs/CHALLENGE.md`.
+- [x] Comandos reproduzíveis.

@@ -292,8 +292,6 @@ func writeWageringServiceError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusBadRequest, "REFERENCE_REQUIRED", "reference is required")
 	case errors.Is(err, domainwagering.ErrDuplicateReversal):
 		writeAPIError(w, http.StatusUnprocessableEntity, "DUPLICATE_REVERSAL", "duplicate reversal")
-	case errors.Is(err, domainwagering.ErrUnsupportedKind):
-		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "kind not supported yet")
 	case errors.Is(err, wageringapp.ErrInvalidCommand),
 		errors.Is(err, domainwagering.ErrInvalidTransaction):
 		writeAPIError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid transaction")

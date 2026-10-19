@@ -7,12 +7,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
@@ -185,7 +187,7 @@ func TestConcurrentDuplicateBetProcessesOnce(t *testing.T) {
 	wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
 	command := processCommand("provider-a", "bet-concurrent", "idem-concurrent", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", "")
 
-	const workers = 20
+	const workers = 50
 	var waitGroup sync.WaitGroup
 	errorsChannel := make(chan error, workers)
 	replays := make(chan bool, workers)
@@ -225,6 +227,198 @@ func TestConcurrentDuplicateBetProcessesOnce(t *testing.T) {
 
 	var balanceMinor, version int64
 	if err := pool.QueryRow(ctx, `SELECT balance_minor, version FROM wallets WHERE id = $1`, wallet.ID().String()).Scan(&balanceMinor, &version); err != nil {
+		t.Fatalf("query wallet: %v", err)
+	}
+	if balanceMinor != 9000 || version != 2 {
+		t.Fatalf("wallet = %d v%d, want 9000 v2", balanceMinor, version)
+	}
+}
+
+func TestTwoDistinctBetsOverSharedBalance(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	walletService := walletapp.NewService(postgres.NewUnitOfWork(pool))
+	wageringService := wageringapp.NewService(postgres.NewUnitOfWork(pool))
+	playerID := uuid.New()
+
+	wallet := createTestWallet(t, ctx, walletService, playerID, "100.00")
+	commands := []wageringapp.ProcessCommand{
+		processCommand("provider-a", "bet-80-a", "idem-80-a", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "80.00", ""),
+		processCommand("provider-a", "bet-80-b", "idem-80-b", playerID, wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "80.00", ""),
+	}
+
+	type outcome struct {
+		result *wageringapp.ProcessResult
+		err    error
+	}
+	outcomes := make(chan outcome, len(commands))
+	var waitGroup sync.WaitGroup
+
+	for _, command := range commands {
+		waitGroup.Add(1)
+		go func(cmd wageringapp.ProcessCommand) {
+			defer waitGroup.Done()
+			result, err := wageringService.ProcessTransaction(ctx, cmd)
+			outcomes <- outcome{result: result, err: err}
+		}(command)
+	}
+	waitGroup.Wait()
+	close(outcomes)
+
+	processed := 0
+	rejected := 0
+	for outcome := range outcomes {
+		if outcome.err != nil {
+			t.Fatalf("concurrent BET error = %v", outcome.err)
+		}
+		switch outcome.result.Transaction.Status() {
+		case domainwagering.StatusProcessed:
+			processed++
+		case domainwagering.StatusRejected:
+			rejected++
+			assertRejected(t, outcome.result, "INSUFFICIENT_FUNDS")
+		default:
+			t.Fatalf("unexpected status = %q", outcome.result.Transaction.Status())
+		}
+	}
+
+	if processed != 1 || rejected != 1 {
+		t.Fatalf("processed = %d, rejected = %d; want 1 and 1", processed, rejected)
+	}
+
+	var balanceMinor, version int64
+	if err := pool.QueryRow(ctx, `SELECT balance_minor, version FROM wallets WHERE id = $1`, wallet.ID().String()).Scan(&balanceMinor, &version); err != nil {
+		t.Fatalf("query wallet: %v", err)
+	}
+	if balanceMinor != 2000 || version != 2 {
+		t.Fatalf("wallet = %d v%d, want 2000 v2", balanceMinor, version)
+	}
+
+	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wallet_ledger_entries WHERE direction = 'DEBIT'`, 1)
+	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE kind = 'BET' AND status = 'PROCESSED'`, 1)
+	assertCount(t, ctx, pool, `SELECT COUNT(*) FROM wager_transactions WHERE kind = 'BET' AND status = 'REJECTED'`, 1)
+}
+
+func TestParallelIndependentWallets(t *testing.T) {
+	const walletCount = 5
+
+	pool := newTestPool(t)
+	ctx := context.Background()
+	walletService := walletapp.NewService(postgres.NewUnitOfWork(pool))
+	wageringService := wageringapp.NewService(postgres.NewUnitOfWork(pool))
+
+	wallets := make([]*domainwallet.Wallet, walletCount)
+	for index := range wallets {
+		wallets[index] = createTestWallet(t, ctx, walletService, uuid.New(), "100.00")
+	}
+
+	errs := make([]error, walletCount)
+	var waitGroup sync.WaitGroup
+
+	for index, wallet := range wallets {
+		waitGroup.Add(1)
+		go func(index int, wallet *domainwallet.Wallet) {
+			defer waitGroup.Done()
+			_, errs[index] = wageringService.ProcessTransaction(ctx, processCommand(
+				"provider-a",
+				fmt.Sprintf("bet-parallel-%d", index),
+				fmt.Sprintf("idem-parallel-%d", index),
+				wallet.PlayerID(),
+				wallet.ID(),
+				"round-1",
+				"game-1",
+				domainwagering.KindBet,
+				"10.00",
+				"",
+			))
+		}(index, wallet)
+	}
+	waitGroup.Wait()
+
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("wallet %d error = %v", index, err)
+		}
+	}
+
+	for index, wallet := range wallets {
+		var balanceMinor int64
+		if err := pool.QueryRow(ctx, `SELECT balance_minor FROM wallets WHERE id = $1`, wallet.ID().String()).Scan(&balanceMinor); err != nil {
+			t.Fatalf("wallet %d balance: %v", index, err)
+		}
+		if balanceMinor != 9000 {
+			t.Fatalf("wallet %d balance = %d, want 9000", index, balanceMinor)
+		}
+	}
+}
+
+func TestThreeIndependentServices(t *testing.T) {
+	pool1, dsn := newTestDatabase(t, true)
+	ctx := context.Background()
+
+	pool2, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("create second pool: %v", err)
+	}
+	pool3, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("create third pool: %v", err)
+	}
+	t.Cleanup(func() {
+		pool2.Close()
+		pool3.Close()
+	})
+
+	walletService := walletapp.NewService(postgres.NewUnitOfWork(pool1))
+	wallet := createTestWallet(t, ctx, walletService, uuid.New(), "100.00")
+
+	services := []*wageringapp.Service{
+		wageringapp.NewService(postgres.NewUnitOfWork(pool1)),
+		wageringapp.NewService(postgres.NewUnitOfWork(pool2)),
+		wageringapp.NewService(postgres.NewUnitOfWork(pool3)),
+	}
+	command := processCommand("provider-a", "bet-three-instances", "idem-three-instances", wallet.PlayerID(), wallet.ID(), "round-1", "game-1", domainwagering.KindBet, "10.00", "")
+
+	const workers = 50
+	var waitGroup sync.WaitGroup
+	errorsChannel := make(chan error, workers)
+	replays := make(chan bool, workers)
+
+	for index := 0; index < workers; index++ {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			result, err := services[index%len(services)].ProcessTransaction(ctx, command)
+			if err != nil {
+				errorsChannel <- err
+				return
+			}
+			replays <- result.IdempotentReplay
+		}(index)
+	}
+	waitGroup.Wait()
+	close(errorsChannel)
+	close(replays)
+
+	for err := range errorsChannel {
+		t.Fatalf("concurrent error = %v", err)
+	}
+
+	nonReplays := 0
+	for replay := range replays {
+		if !replay {
+			nonReplays++
+		}
+	}
+	if nonReplays != 1 {
+		t.Fatalf("non-replays = %d, want 1", nonReplays)
+	}
+
+	assertCount(t, ctx, pool1, `SELECT COUNT(*) FROM wager_transactions WHERE external_transaction_id = 'bet-three-instances'`, 1)
+	assertCount(t, ctx, pool1, `SELECT COUNT(*) FROM wallet_ledger_entries WHERE transaction_id IN (SELECT id FROM wager_transactions WHERE external_transaction_id = 'bet-three-instances')`, 1)
+
+	var balanceMinor, version int64
+	if err := pool1.QueryRow(ctx, `SELECT balance_minor, version FROM wallets WHERE id = $1`, wallet.ID().String()).Scan(&balanceMinor, &version); err != nil {
 		t.Fatalf("query wallet: %v", err)
 	}
 	if balanceMinor != 9000 || version != 2 {

@@ -17,20 +17,22 @@ import (
 	domainwagering "github.com/TheProzin/Jungle-Go/internal/domain/wagering"
 	domainwallet "github.com/TheProzin/Jungle-Go/internal/domain/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/observability"
+	"github.com/TheProzin/Jungle-Go/internal/platform/failpoint"
 )
 
 const consumerName = "wager-transactions-consumer"
 
 type Consumer struct {
-	client         *sqsservice.Client
-	queueURL       string
-	dlqURL         string
-	service        *wageringapp.Service
-	logger         *slog.Logger
-	maxMessages    int32
-	waitTime       int32
-	initialBackoff time.Duration
-	maxBackoff     time.Duration
+	client           *sqsservice.Client
+	queueURL         string
+	dlqURL           string
+	service          *wageringapp.Service
+	logger           *slog.Logger
+	maxMessages      int32
+	waitTime         int32
+	initialBackoff   time.Duration
+	maxBackoff       time.Duration
+	allowedProviders map[string]bool
 }
 
 func NewConsumer(
@@ -47,16 +49,24 @@ func NewConsumer(
 		waitTime = 20
 	}
 
+	allowedProviders := make(map[string]bool, len(cfg.AllowedProviders))
+	for _, providerID := range cfg.AllowedProviders {
+		if providerID != "" {
+			allowedProviders[providerID] = true
+		}
+	}
+
 	return &Consumer{
-		client:         client,
-		queueURL:       cfg.SQSTransactionsQueueURL,
-		dlqURL:         cfg.SQSTransactionsDLQURL,
-		service:        service,
-		logger:         logger,
-		maxMessages:    int32(cfg.SQSConsumerMaxMessages),
-		waitTime:       waitTime,
-		initialBackoff: cfg.SQSConsumerInitialBackoff,
-		maxBackoff:     cfg.SQSConsumerMaxBackoff,
+		client:           client,
+		queueURL:         cfg.SQSTransactionsQueueURL,
+		dlqURL:           cfg.SQSTransactionsDLQURL,
+		service:          service,
+		logger:           logger,
+		maxMessages:      int32(cfg.SQSConsumerMaxMessages),
+		waitTime:         waitTime,
+		initialBackoff:   cfg.SQSConsumerInitialBackoff,
+		maxBackoff:       cfg.SQSConsumerMaxBackoff,
+		allowedProviders: allowedProviders,
 	}
 }
 
@@ -130,6 +140,14 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 		"walletId", command.WalletID.String(),
 	)
 
+	if !c.providerAllowed(command.ProviderID) {
+		observability.Default.RecordSQSMessage("forbidden_provider")
+		logger.Error("provider is not allowed")
+		c.markFailed(envelope.MessageID, "provider is not allowed")
+		c.sendToDLQAndDelete(message, "provider is not allowed")
+		return
+	}
+
 	result, err := c.service.ProcessTransactionWithInbox(
 		ctx,
 		command,
@@ -178,8 +196,20 @@ func (c *Consumer) handleMessage(ctx context.Context, message types.Message) {
 		fields = append(fields, "failureCode", *failureCode)
 	}
 	observability.Default.RecordSQSMessage(string(result.Transaction.Status()))
+	if err := failpoint.Trigger("sqs-after-commit"); err != nil {
+		logger.Error("failpoint sqs-after-commit", "error", err)
+		c.releaseMessage(message)
+		return
+	}
 	logger.Info("message processed", fields...)
 	c.deleteMessage(message)
+}
+
+func (c *Consumer) providerAllowed(providerID string) bool {
+	if len(c.allowedProviders) == 0 {
+		return true
+	}
+	return c.allowedProviders[providerID]
 }
 
 func isPermanent(err error) bool {
@@ -187,7 +217,6 @@ func isPermanent(err error) bool {
 	case errors.Is(err, wageringapp.ErrInvalidCommand),
 		errors.Is(err, wageringapp.ErrReferenceRequired),
 		errors.Is(err, domainwagering.ErrInvalidTransaction),
-		errors.Is(err, domainwagering.ErrUnsupportedKind),
 		errors.Is(err, domainwagering.ErrIdempotencyKeyConflict),
 		errors.Is(err, domainwagering.ErrExternalTransactionConflict),
 		errors.Is(err, domainwagering.ErrDuplicateReversal),
