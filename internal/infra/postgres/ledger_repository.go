@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/TheProzin/Jungle-Go/internal/app/wallet"
+	"github.com/TheProzin/Jungle-Go/internal/app/ports"
 	"github.com/TheProzin/Jungle-Go/internal/domain/ledger"
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
 )
@@ -43,7 +43,7 @@ func (r *LedgerRepository) Create(ctx context.Context, entry *ledger.Entry) erro
 func (r *LedgerRepository) ListByWallet(
 	ctx context.Context,
 	walletID uuid.UUID,
-	after *wallet.Cursor,
+	after *ports.Cursor,
 	limit int,
 ) ([]*ledger.Entry, error) {
 	query := `

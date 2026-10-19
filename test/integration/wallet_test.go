@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/domain/money"
@@ -225,11 +226,13 @@ func TestLedgerPaginationAndReconciliation(t *testing.T) {
 
 func TestWalletHTTPContract(t *testing.T) {
 	pool := newTestPool(t)
-	service := walletapp.NewService(postgres.NewUnitOfWork(pool))
+	unitOfWork := postgres.NewUnitOfWork(pool)
+	service := walletapp.NewService(unitOfWork)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	handler := httpapi.NewWalletHandler(service)
+	wageringHandler := httpapi.NewWageringHandler(wageringapp.NewService(unitOfWork))
 	health := httpapi.NewHealth(pool, nil, &config.Config{ReadinessTimeout: time.Second}, logger)
-	server := httptest.NewServer(httpapi.NewMux(health, handler))
+	server := httptest.NewServer(httpapi.NewMux(health, handler, wageringHandler))
 	defer server.Close()
 
 	playerID := uuid.New()

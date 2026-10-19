@@ -107,7 +107,7 @@ func (s *Service) createOpeningRecords(
 	if err != nil {
 		return err
 	}
-	if err := repos.Transactions.CreateOpening(ctx, opening); err != nil {
+	if err := repos.Transactions.Create(ctx, opening); err != nil {
 		return err
 	}
 

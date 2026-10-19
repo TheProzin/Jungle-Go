@@ -17,6 +17,7 @@ var (
 	ErrNonPositiveAmount      = errors.New("non-positive amount")
 	ErrWalletNotFound         = errors.New("wallet not found")
 	ErrWalletAlreadyExists    = errors.New("wallet already exists")
+	ErrConcurrentUpdate       = errors.New("concurrent wallet update")
 )
 
 type Wallet struct {

@@ -36,6 +36,35 @@ func (r *WalletRepository) Create(ctx context.Context, wallet *domainwallet.Wall
 }
 
 func (r *WalletRepository) GetByID(ctx context.Context, id uuid.UUID) (*domainwallet.Wallet, error) {
+	return r.getByID(ctx, id, false)
+}
+
+func (r *WalletRepository) GetByIDForUpdate(ctx context.Context, id uuid.UUID) (*domainwallet.Wallet, error) {
+	return r.getByID(ctx, id, true)
+}
+
+func (r *WalletRepository) UpdateBalance(ctx context.Context, wallet *domainwallet.Wallet, expectedVersion int64) error {
+	tag, err := r.query.Exec(ctx, `
+		UPDATE wallets
+		SET balance_minor = $1, version = $2, updated_at = $3
+		WHERE id = $4 AND version = $5
+	`,
+		wallet.Balance().Minor(),
+		wallet.Version(),
+		wallet.UpdatedAt(),
+		wallet.ID().String(),
+		expectedVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("update wallet balance: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domainwallet.ErrConcurrentUpdate
+	}
+	return nil
+}
+
+func (r *WalletRepository) getByID(ctx context.Context, id uuid.UUID, forUpdate bool) (*domainwallet.Wallet, error) {
 	var (
 		idText       string
 		playerIDText string
@@ -46,11 +75,16 @@ func (r *WalletRepository) GetByID(ctx context.Context, id uuid.UUID) (*domainwa
 		updatedAt    time.Time
 	)
 
-	err := r.query.QueryRow(ctx, `
+	query := `
 		SELECT id, player_id, currency, balance_minor, version, created_at, updated_at
 		FROM wallets
 		WHERE id = $1
-	`, id.String()).Scan(
+	`
+	if forUpdate {
+		query += ` FOR UPDATE`
+	}
+
+	err := r.query.QueryRow(ctx, query, id.String()).Scan(
 		&idText,
 		&playerIDText,
 		&currency,

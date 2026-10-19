@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/fx"
 
+	wageringapp "github.com/TheProzin/Jungle-Go/internal/app/wagering"
 	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/httpapi"
@@ -21,10 +22,14 @@ var App = fx.Module("app",
 		postgres.NewUnitOfWork,
 		sqs.NewClient,
 		walletapp.NewService,
+		wageringapp.NewServiceWithConfig,
+		wageringapp.NewReferenceWorker,
 		httpapi.NewHealth,
 		httpapi.NewWalletHandler,
+		httpapi.NewWageringHandler,
 		httpapi.NewMux,
 		httpapi.NewServer,
 	),
 	fx.Invoke(func(*http.Server) {}),
+	fx.Invoke(StartReferenceWorker),
 )

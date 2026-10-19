@@ -29,6 +29,12 @@ type Config struct {
 
 	ShutdownTimeout  time.Duration
 	ReadinessTimeout time.Duration
+
+	ReferenceMaxAttempts    int
+	ReferenceTTL            time.Duration
+	ReferenceInitialBackoff time.Duration
+	ReferenceMaxBackoff     time.Duration
+	ReferenceWorkerInterval time.Duration
 }
 
 func Load() (*Config, error) {
@@ -48,6 +54,11 @@ func Load() (*Config, error) {
 		KeycloakAudience:        os.Getenv("KEYCLOAK_AUDIENCE"),
 		ShutdownTimeout:         envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
 		ReadinessTimeout:        envDuration("READINESS_TIMEOUT", 2*time.Second),
+		ReferenceMaxAttempts:    envInt("REFERENCE_MAX_ATTEMPTS", 10),
+		ReferenceTTL:            envDuration("REFERENCE_TTL", time.Hour),
+		ReferenceInitialBackoff: envDuration("REFERENCE_INITIAL_BACKOFF", time.Second),
+		ReferenceMaxBackoff:     envDuration("REFERENCE_MAX_BACKOFF", 5*time.Minute),
+		ReferenceWorkerInterval: envDuration("REFERENCE_WORKER_INTERVAL", time.Second),
 	}
 
 	var errs []error
@@ -68,6 +79,21 @@ func Load() (*Config, error) {
 	}
 	if cfg.ReadinessTimeout <= 0 {
 		errs = append(errs, fmt.Errorf("READINESS_TIMEOUT must be positive"))
+	}
+	if cfg.ReferenceMaxAttempts < 1 {
+		errs = append(errs, fmt.Errorf("REFERENCE_MAX_ATTEMPTS must be at least 1"))
+	}
+	if cfg.ReferenceTTL <= 0 {
+		errs = append(errs, fmt.Errorf("REFERENCE_TTL must be positive"))
+	}
+	if cfg.ReferenceInitialBackoff <= 0 {
+		errs = append(errs, fmt.Errorf("REFERENCE_INITIAL_BACKOFF must be positive"))
+	}
+	if cfg.ReferenceMaxBackoff < cfg.ReferenceInitialBackoff {
+		errs = append(errs, fmt.Errorf("REFERENCE_MAX_BACKOFF must be at least REFERENCE_INITIAL_BACKOFF"))
+	}
+	if cfg.ReferenceWorkerInterval <= 0 {
+		errs = append(errs, fmt.Errorf("REFERENCE_WORKER_INTERVAL must be positive"))
 	}
 
 	if err := errors.Join(errs...); err != nil {
