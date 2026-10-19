@@ -1,10 +1,11 @@
-import { useState } from 'react';
-import { pretty, type ApiCall } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { pretty, type ApiCall, type WalletRef } from '../lib/api';
+import type { Provider } from '../lib/identities';
 import type { TransactionInput } from '../lib/envelope';
 
 const KINDS = ['BET', 'WIN', 'LOSS', 'REFUND', 'ROLLBACK'];
 
-export function Transaction({ call }: { call: ApiCall }) {
+export function Transaction({ call, provider, wallet }: { call: ApiCall; provider: Provider; wallet: WalletRef | null }) {
   const [form, setForm] = useState<TransactionInput>({
     providerId: 'provider-a',
     externalTransactionId: `tx-${crypto.randomUUID()}`,
@@ -19,6 +20,21 @@ export function Transaction({ call }: { call: ApiCall }) {
   });
   const [idempotencyKey, setIdempotencyKey] = useState<string>(`provider-a:${form.externalTransactionId}`);
   const [output, setOutput] = useState('');
+
+  useEffect(() => {
+    setForm((current) => {
+      const external = `tx-${crypto.randomUUID()}`;
+      setIdempotencyKey(`${provider}:${external}`);
+      return { ...current, providerId: provider, externalTransactionId: external };
+    });
+  }, [provider]);
+
+  useEffect(() => {
+    if (!wallet) {
+      return;
+    }
+    setForm((current) => ({ ...current, playerId: wallet.playerId, walletId: wallet.id }));
+  }, [wallet]);
 
   function update<K extends keyof TransactionInput>(key: K, value: TransactionInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -56,6 +72,7 @@ export function Transaction({ call }: { call: ApiCall }) {
   return (
     <section className="card">
       <h2>Operação <span className="hint">(token provider)</span></h2>
+      {!wallet && <p className="hint">Crie uma carteira na seção acima; playerId e walletId serão preenchidos automaticamente.</p>}
       <div className="grid">
         <label>
           providerId

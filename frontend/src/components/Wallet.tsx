@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { pretty, type ApiCall } from '../lib/api';
+import { pretty, type ApiCall, type WalletRef } from '../lib/api';
 
-export function Wallet({ call }: { call: ApiCall }) {
+export function Wallet({ call, onCreated }: { call: ApiCall; onCreated: (wallet: WalletRef) => void }) {
   const [playerId, setPlayerId] = useState<string>(crypto.randomUUID());
   const [amount, setAmount] = useState('100.00');
   const [walletId, setWalletId] = useState('');
@@ -20,6 +20,7 @@ export function Wallet({ call }: { call: ApiCall }) {
     const body = result.body as { id?: string };
     if (result.status === 201 && body?.id) {
       setWalletId(body.id);
+      onCreated({ id: body.id, playerId });
     }
     setOutput(`${result.status}\n${pretty(result.body)}`);
   }
@@ -46,6 +47,7 @@ export function Wallet({ call }: { call: ApiCall }) {
   return (
     <section className="card">
       <h2>Carteira <span className="hint">(token internal)</span></h2>
+      <p className="hint">A carteira criada é usada automaticamente em Operação e Simulador SQS.</p>
       <div className="grid">
         <label>
           playerId

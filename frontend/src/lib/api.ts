@@ -5,9 +5,12 @@ export type ApiResult = {
   correlationId: string;
 };
 
+export type AuthKind = 'internal' | 'provider' | 'none';
+
 export type ApiOptions = {
   method?: string;
   token?: string;
+  auth?: AuthKind;
   body?: unknown;
   headers?: Record<string, string>;
 };
@@ -80,3 +83,5 @@ export function pretty(value: unknown): string {
   }
   return JSON.stringify(value, null, 2);
 }
+
+export type WalletRef = { id: string; playerId: string };

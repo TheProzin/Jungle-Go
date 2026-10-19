@@ -1,25 +1,37 @@
-import { useState } from 'react';
-import { pretty, type ApiCall } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { pretty, type ApiCall, type AuthKind } from '../lib/api';
+import type { Provider } from '../lib/identities';
 
-export function Read({ call }: { call: ApiCall }) {
+export function Read({ call, provider }: { call: ApiCall; provider: Provider }) {
   const [transactionId, setTransactionId] = useState('');
-  const [providerId, setProviderId] = useState('provider-a');
+  const [providerId, setProviderId] = useState<string>(provider);
   const [externalTransactionId, setExternalTransactionId] = useState('');
+  const [authMode, setAuthMode] = useState<AuthKind>('provider');
   const [output, setOutput] = useState('');
 
+  useEffect(() => {
+    setProviderId(provider);
+  }, [provider]);
+
   async function getById() {
-    const result = await call(`/wagering/transactions/${transactionId}`);
+    const result = await call(`/wagering/transactions/${transactionId}`, { auth: authMode });
     setOutput(`${result.status}\n${pretty(result.body)}`);
   }
 
   async function getByProvider() {
-    const result = await call(`/providers/${providerId}/wagering/transactions/${externalTransactionId}`);
+    const result = await call(`/providers/${providerId}/wagering/transactions/${externalTransactionId}`, {
+      auth: authMode,
+    });
     setOutput(`${result.status}\n${pretty(result.body)}`);
   }
 
   return (
     <section className="card">
-      <h2>Consultas <span className="hint">(internal ou provider dono)</span></h2>
+      <h2>Consultas</h2>
+      <p className="hint">
+        Use token <strong>provider</strong> para validar isolamento (só a própria transação) ou
+        <strong> internal</strong> para ler qualquer uma.
+      </p>
       <div className="grid">
         <label>
           transactionId
@@ -32,6 +44,13 @@ export function Read({ call }: { call: ApiCall }) {
         <label>
           externalTransactionId
           <input value={externalTransactionId} onChange={(event) => setExternalTransactionId(event.target.value)} />
+        </label>
+        <label>
+          Token
+          <select value={authMode} onChange={(event) => setAuthMode(event.target.value as AuthKind)}>
+            <option value="provider">provider selecionado</option>
+            <option value="internal">internal</option>
+          </select>
         </label>
       </div>
       <div className="row">

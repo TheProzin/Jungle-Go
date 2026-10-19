@@ -514,6 +514,37 @@ O console cobre: autenticação, health, criação/consulta de carteira, ledger,
 reconciliação, BET/WIN/LOSS/REFUND/ROLLBACK, consultas de transação, métricas e
 simulação de mensagem SQS.
 
+### Como funciona a autenticação no console
+
+Não existe login de usuário. O Keycloak emite tokens `client_credentials` para
+**clientes OAuth**:
+
+| Cliente | Papel | Pode |
+| --- | --- | --- |
+| `internal-service` | `internal` | carteira, ledger, reconciliação, métricas, simulador SQS |
+| `provider-a` | `provider` | operações do provedor A |
+| `provider-b` | `provider` | operações do provedor B |
+
+O console obtém automaticamente os dois tokens:
+
+- token **internal** para wallet/ledger/reconciliação/métricas/SQS;
+- token **provider** do provedor selecionado no topo para operações de jogo.
+
+O seletor no topo (`provider-a`/`provider-b`) só define qual provedor será usado
+nas operações; ele não é um "usuário". Para testar:
+
+1. deixe o provider em `provider-a`;
+2. crie uma carteira na seção **Carteira** (usa token internal automaticamente);
+3. envie uma operação na seção **Operação** (usa o token provider automaticamente).
+
+A carteira criada é compartilhada entre as seções: `playerId` e `walletId` são
+preenchidos automaticamente em **Operação** e **Simulador SQS**. Se você alterar
+o `playerId` manualmente para um valor que não é o dono da carteira, a API
+retorna `422 WALLET_PLAYER_MISMATCH` — esse é o comportamento correto.
+
+Para validar isolamento, troque o provider no topo e consulte a transação com
+token `provider`; o acesso à transação do outro provedor retorna `403`.
+
 Build de produção:
 
 ```sh

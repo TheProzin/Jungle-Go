@@ -174,3 +174,24 @@ code {
   padding: 1px 5px;
   border-radius: 4px;
 }
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.badge {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: #9da7b3;
+}
+
+.badge.ok {
+  border-color: #238636;
+  color: #3fb950;
+}

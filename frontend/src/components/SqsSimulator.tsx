@@ -1,8 +1,9 @@
-import { useState } from 'react';
-import { pretty, type ApiCall } from '../lib/api';
+import { useEffect, useState } from 'react';
+import { pretty, type ApiCall, type WalletRef } from '../lib/api';
+import type { Provider } from '../lib/identities';
 import { buildEnvelope, type TransactionInput } from '../lib/envelope';
 
-export function SqsSimulator({ call }: { call: ApiCall }) {
+export function SqsSimulator({ call, provider, wallet }: { call: ApiCall; provider: Provider; wallet: WalletRef | null }) {
   const [form, setForm] = useState<TransactionInput>({
     providerId: 'provider-a',
     externalTransactionId: `sqs-${crypto.randomUUID()}`,
@@ -18,6 +19,17 @@ export function SqsSimulator({ call }: { call: ApiCall }) {
   const [messageId, setMessageId] = useState<string>(`msg-${crypto.randomUUID()}`);
   const [output, setOutput] = useState('');
 
+  useEffect(() => {
+    setForm((current) => ({ ...current, providerId: provider }));
+  }, [provider]);
+
+  useEffect(() => {
+    if (!wallet) {
+      return;
+    }
+    setForm((current) => ({ ...current, playerId: wallet.playerId, walletId: wallet.id }));
+  }, [wallet]);
+
   function update<K extends keyof TransactionInput>(key: K, value: TransactionInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -31,6 +43,7 @@ export function SqsSimulator({ call }: { call: ApiCall }) {
   return (
     <section className="card">
       <h2>Simulador SQS <span className="hint">(token internal)</span></h2>
+      {!wallet && <p className="hint">Crie uma carteira na seção Carteira; playerId e walletId serão preenchidos automaticamente.</p>}
       <p className="hint">
         Publica o envelope em <code>wager-transactions.fifo</code>. O consumer processa de forma
         assíncrona; consulte a transação depois.
