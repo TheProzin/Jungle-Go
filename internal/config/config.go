@@ -1,0 +1,108 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+)
+
+type Config struct {
+	Env      string
+	Port     int
+	LogLevel string
+
+	DatabaseURL string
+
+	AWSRegion          string
+	AWSEndpoint        string
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+
+	SQSTransactionsQueueURL string
+	SQSEventsQueueURL       string
+
+	KeycloakIssuer   string
+	KeycloakJWKSURL  string
+	KeycloakAudience string
+
+	ShutdownTimeout  time.Duration
+	ReadinessTimeout time.Duration
+}
+
+func Load() (*Config, error) {
+	cfg := &Config{
+		Env:                     env("APP_ENV", "local"),
+		Port:                    envInt("APP_PORT", 8080),
+		LogLevel:                env("LOG_LEVEL", "info"),
+		DatabaseURL:             os.Getenv("DATABASE_URL"),
+		AWSRegion:               env("AWS_REGION", "us-east-1"),
+		AWSEndpoint:             os.Getenv("AWS_ENDPOINT_URL"),
+		AWSAccessKeyID:          os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretAccessKey:      os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		SQSTransactionsQueueURL: os.Getenv("SQS_TRANSACTIONS_QUEUE_URL"),
+		SQSEventsQueueURL:       os.Getenv("SQS_EVENTS_QUEUE_URL"),
+		KeycloakIssuer:          os.Getenv("KEYCLOAK_ISSUER"),
+		KeycloakJWKSURL:         os.Getenv("KEYCLOAK_JWKS_URL"),
+		KeycloakAudience:        os.Getenv("KEYCLOAK_AUDIENCE"),
+		ShutdownTimeout:         envDuration("SHUTDOWN_TIMEOUT", 20*time.Second),
+		ReadinessTimeout:        envDuration("READINESS_TIMEOUT", 2*time.Second),
+	}
+
+	var errs []error
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		errs = append(errs, fmt.Errorf("APP_PORT must be between 1 and 65535"))
+	}
+	if cfg.DatabaseURL == "" {
+		errs = append(errs, fmt.Errorf("DATABASE_URL is required"))
+	}
+	if cfg.AWSRegion == "" {
+		errs = append(errs, fmt.Errorf("AWS_REGION is required"))
+	}
+	if cfg.SQSTransactionsQueueURL == "" {
+		errs = append(errs, fmt.Errorf("SQS_TRANSACTIONS_QUEUE_URL is required"))
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("SHUTDOWN_TIMEOUT must be positive"))
+	}
+	if cfg.ReadinessTimeout <= 0 {
+		errs = append(errs, fmt.Errorf("READINESS_TIMEOUT must be positive"))
+	}
+
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	return cfg, nil
+}
+
+func env(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
