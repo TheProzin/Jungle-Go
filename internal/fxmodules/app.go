@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/fx"
 
+	walletapp "github.com/TheProzin/Jungle-Go/internal/app/wallet"
 	"github.com/TheProzin/Jungle-Go/internal/config"
 	"github.com/TheProzin/Jungle-Go/internal/httpapi"
 	"github.com/TheProzin/Jungle-Go/internal/infra/postgres"
@@ -17,8 +18,11 @@ var App = fx.Module("app",
 		config.Load,
 		observability.NewLogger,
 		postgres.NewPool,
+		postgres.NewUnitOfWork,
 		sqs.NewClient,
+		walletapp.NewService,
 		httpapi.NewHealth,
+		httpapi.NewWalletHandler,
 		httpapi.NewMux,
 		httpapi.NewServer,
 	),

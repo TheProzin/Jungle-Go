@@ -70,6 +70,10 @@ func (m Money) Amount() string {
 	return fmt.Sprintf("%s%d.%02d", sign, absolute/100, absolute%100)
 }
 
+func (m Money) IsValid() bool {
+	return validCurrency(m.currency)
+}
+
 func (m Money) IsZero() bool {
 	return m.minor == 0
 }

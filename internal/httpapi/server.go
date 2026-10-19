@@ -14,10 +14,14 @@ import (
 	"github.com/TheProzin/Jungle-Go/internal/config"
 )
 
-func NewMux(health *Health) *http.ServeMux {
+func NewMux(health *Health, wallets *WalletHandler) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", health.Live)
 	mux.HandleFunc("GET /health/ready", health.Ready)
+	mux.HandleFunc("POST /wallets", wallets.Create)
+	mux.HandleFunc("GET /wallets/{walletId}", wallets.Get)
+	mux.HandleFunc("GET /wallets/{walletId}/ledger", wallets.Ledger)
+	mux.HandleFunc("POST /wallets/{walletId}/reconciliation", wallets.Reconcile)
 	return mux
 }
 

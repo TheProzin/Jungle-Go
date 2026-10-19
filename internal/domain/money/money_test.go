@@ -375,6 +375,18 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIsValid(t *testing.T) {
+	valid, _ := Parse("1.00", "BRL")
+	if !valid.IsValid() {
+		t.Fatal("IsValid() = false, want true")
+	}
+
+	var zero Money
+	if zero.IsValid() {
+		t.Fatal("IsValid() = true for zero value, want false")
+	}
+}
+
 func TestZeroValueRejected(t *testing.T) {
 	var zero Money
 	one, _ := Parse("1.00", "BRL")
