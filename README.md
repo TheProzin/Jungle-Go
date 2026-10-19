@@ -192,6 +192,20 @@ docker compose exec localstack awslocal sqs list-queues
 
 A aplicação **não** depende da deduplicação do SQS para integridade. Unicidade e idempotência são garantidas no PostgreSQL.
 
+### IAM (LocalStack)
+
+O script de inicialização cria os usuários `wager-consumer` (consome a fila de
+transações e publica eventos/DLQ) e `wager-producer` (publica transações) com
+políticas de menor privilégio. No ambiente local a aplicação usa a credencial
+raiz `test`/`test`; o IAM é documentado como contrato para execução em AWS.
+
+Verificação:
+
+```sh
+docker compose exec localstack awslocal iam list-users
+docker compose exec localstack awslocal iam list-user-policies --user-name wager-consumer
+```
+
 ---
 
 ## Keycloak

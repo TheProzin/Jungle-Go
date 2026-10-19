@@ -423,6 +423,12 @@ SQS:
 - provedores usam HTTP como canal de entrada;
 - `ALLOWED_PROVIDERS` define o registry aceito pelo consumidor; provider
   desconhecido é falha permanente e vai para a DLQ.
+- O LocalStack provisiona os usuários IAM `wager-consumer` (consome a fila de
+  transações e publica eventos/DLQ) e `wager-producer` (publica transações) com
+  políticas de menor privilégio em `deploy/localstack/init-queues.sh`. No
+  ambiente local a aplicação roda com a credencial raiz `test`/`test`, portanto
+  o IAM não é *enforçado*; em AWS real a aplicação usaria as credenciais do
+  `wager-consumer`.
 
 ### 14.1 Contratos HTTP e códigos
 
@@ -509,6 +515,10 @@ componentes que o utilizam.
 | Infraestrutura permanente | payload irrecuperável, corrupção | `FAILED` / DLQ |
 
 Falhas transitórias não são persistidas como rejeição.
+
+O estado transacional `FAILED` permanece modelado e testado (`TestMarkFailed`),
+porém não é produzido em runtime: falhas permanentes de mensagem são tratadas na
+DLQ e a inbox é marcada `FAILED`.
 
 Failpoints de teste em `internal/platform/failpoint` permitem simular:
 
